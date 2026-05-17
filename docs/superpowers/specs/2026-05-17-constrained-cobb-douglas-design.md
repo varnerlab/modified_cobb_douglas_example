@@ -526,9 +526,84 @@ Costs deduct from cash at trade time. Taxes accrue lot-by-lot but are **summariz
 
 ---
 
-## 7. The backtest harness
+## 7. The per-sector bandit (universe selection)
 
-### 7.1 Single-strategy run loop
+The bandit is the **universe-selection layer**: it runs once before any backtest and picks the 22-ticker basket the allocator then operates on. The strategy spec §5 has the full motivation; this section is the implementation-side mirror.
+
+### 7.1 Algorithm recap
+
+Eleven parallel ε-greedy bandits, one per GICS sector. Each sector-`s` bandit picks a fixed `q_s`-ticker sub-basket from its `N_s` candidates, with `Σ_s q_s = K_basket = 22`. The eleven winners concatenate into the deployable basket. Action space across all sectors: `Σ_s C(N_s, q_s) ≈ 7,700` arms total, vs `C(413, 22) ≈ 10³⁶` if we tried to pick directly — that's the whole point of the per-sector decomposition.
+
+**Reward (sector-relative 21-day forward log return).** For a candidate sub-basket `𝓑 ⊆ 𝒩_s` evaluated at training day `d`:
+
+```
+R_s(𝓑, d) = r_𝓑(d, d+21)  -  r_EW,s(d, d+21)
+```
+
+where `r_𝓑` is the Cobb-Douglas-allocated buy-and-hold log return of the picked basket and `r_EW,s` is the equal-dollar-weighted log return of all sector members over the same window. Subtracting the within-sector EW return strips out the sector-beta variance that the bandit didn't pick — the residual is pure cross-sectional alpha signal.
+
+**ε-greedy with decaying exploration:**
+
+```
+ε_t = max(ε_floor,  t^(-1/3) · (|A_s| · ln t)^(1/3))     # ε_floor = 0.05
+```
+
+Initialize visited-arm sample-mean estimates `μ̂_𝓑 = 0`, pull counts `n_𝓑 = 0`. At each iteration: with probability `ε_t` explore a uniform-random subset, otherwise exploit `argmax μ̂`. Sample a training day uniformly from `D_train`, observe `r_t`, update `μ̂_𝓑_t` and `n_𝓑_t`.
+
+### 7.2 Sector quotas
+
+Assigned equal-weight per sector with a bonus to the largest sectors. For 11 sectors and `K_basket = 22`: `base = 2`, remainder = 0, so all 11 sectors get exactly `q_s = 2`. This is the uniform `q_s = 2` configuration the S4 notebook uses (`K_COMPARE = 22`).
+
+### 7.3 The three bandit scripts
+
+| Script | Purpose | Output |
+|---|---|---|
+| `02_train_bandit.jl` | Single seed (seed=2026) sanity check. Identical to S4's `per_sector_bandit.jl`, vendored into this repo. | `per_sector_bandit_results.jld2` — winning baskets per sector, reward histories, deployed metrics on hold-out |
+| `03_train_bandit_mc.jl` | 30 independent training runs with seeds 1001–1030. Each run picks its own basket and deploys on the same hold-out window. | `per_sector_bandit_mc_results.jld2` — `sb_W_T_mc`, `sb_sharpe_mc`, `sb_dd_mc` (length-30 vectors), per-seed ticker lists, plus the random-per-sector baseline with the same sector quotas |
+| `04_select_basket.jl` | Reads the MC results, picks the **median-Sharpe seed** as the canonical bandit basket, writes the frozen 22-ticker list. | `frozen_basket.jld2` (committed) — tickers, sector quotas, seed_id, hold-out metrics, the MC distribution summary for the notebook to render |
+
+The median-Sharpe seed is the chosen pinning rule (source spec §5.3 default). Alternative — basket as the union of all 30 baskets weighted by selection frequency — is documented in the spec's open questions but deferred for v1.
+
+### 7.4 What the basket looks like (load-bearing assumption)
+
+After 04 runs, `frozen_basket.jld2` contains a roughly Tech-leaning 22-name basket with 2 names per GICS sector. The exact tickers depend on the median-Sharpe seed's reward landscape; we don't pre-commit a ticker list in this spec. The notebook renders the resolved basket as part of its setup section. The backtest harness reads `frozen_basket.jld2["tickers"]` as its universe — no hardcoded ticker list anywhere in the codebase.
+
+### 7.5 The basket's role downstream
+
+- **`01_calibrate_sim.jl`** runs on the **full 413-ticker filtered universe** (not just the basket) — so we have OLS estimates for any ticker the bandit might pick.
+- **`02/03_train_bandit*.jl`** use those calibrated estimates to compute each candidate basket's CD allocation and forward return.
+- **`04_select_basket.jl`** subsets the calibration to the 22 winners and writes the frozen artifact.
+- **`05_backtest_strategies.jl`** reads the frozen 22 tickers, slices `sim_calibration.jld2` down to those 22, initializes the EWLS state from those 22 OLS estimates, and walks all 6 strategies on that universe.
+
+The bandit is **frozen** for the entire backtest. Re-running the bandit with a different seed would produce a different basket and a different bake-off; spec §5.4 defers retraining cadence to v2.
+
+### 7.6 Vendoring vs. the lectures repo
+
+`code/src/Bandit.jl` and `scripts/02-04` are adapted from `eCornell-AI-finance-lectures/lectures/session-4/scripts/bandit/{per_sector_bandit.jl, monte_carlo_per_sector_bandit.jl, compare_archetypes.jl}`. Three adaptations:
+
+1. Replace S4's `historical_train_dqn.jl` include (which carried environment + CD evaluator) with explicit calls to our `Allocator.allocate_cobb_douglas` and `Files.load_ohlc_jld2` — no DQN dependency.
+2. Replace the S4 archetype-comparison branch with a simpler "pick the median-Sharpe seed" branch (§7.3 above) since we're not benchmarking against Claude-curated archetypes here.
+3. Read sector CSV from `code/src/data/sp500-sectors.csv` (committed in this repo, not the lectures path).
+
+The core bandit math — quota assignment, ε-greedy iteration, sector-relative reward — is byte-for-byte the same.
+
+### 7.7 Unit test contract
+
+| Test | Setup | Assertion |
+|---|---|---|
+| **Quota sums to K_basket** | 11 sectors, `K_basket = 22` | `Σ_s q_s == 22`; all `q_s == 2` |
+| **Sector-relative reward zero in expectation** | Random uniform subset of a sector, averaged over many days | `mean(R_s) ≈ 0` within MC noise (the subtracted EW return is the within-sector mean by construction) |
+| **ε-greedy decay** | Run the iteration | `ε_t` monotonic-decreasing in `t` until floor; saturates at `ε_floor = 0.05` |
+| **Determinism per seed** | Train twice with `seed = 1001` | Sector winners identical, reward histories byte-for-byte equal |
+| **MC distribution shape** | 30 seeds 1001-1030 | `length(sb_sharpe_mc) == 30`; min < median < max; no NaN |
+| **Frozen artifact contract** | Load `frozen_basket.jld2` | Has keys `tickers` (length 22), `seed_id::Int`, `sector_quotas::Dict{String,Int}`, `mc_summary::NamedTuple` |
+| **Median-seed selection** | Synthetic 30-element `sb_sharpe_mc` | Returned seed corresponds to `sortperm(sb_sharpe_mc)[16]` (the 50th-percentile element of a 30-element vector) |
+
+---
+
+## 8. The backtest harness
+
+### 8.1 Single-strategy run loop
 
 `run_backtest(strategy, env, cost_model, tax_rates) → MyBacktestResult`. Walks the hold-out window day by day.
 
@@ -575,7 +650,7 @@ The EWLS update runs every day, regardless of whether the strategy decided. All 
 
 EWLS half-life: tunable, defaults to ~252 trading days (single-observation influence decays ~50% over a year). Backtest sensitivity sweep alongside σ_max and z.
 
-### 7.2 Per-strategy `should_decide` / `allocate` table
+### 8.2 Per-strategy `should_decide` / `allocate` table
 
 | Strategy | `should_decide` | `allocate` |
 |---|---|---|
@@ -586,7 +661,7 @@ EWLS half-life: tunable, defaults to ~252 trading days (single-observation influ
 | `CDWithMPCStrategy` | `date_idx == 1` OR last trigger fired | analytical unconstrained CD |
 | `ConstrainedCDWithMPCStrategy` | `date_idx == 1` OR last trigger fired | `solve_constrained_cd(...)` (the new design) |
 
-### 7.3 Comparison orchestrator
+### 8.3 Comparison orchestrator
 
 ```julia
 compare_strategies(strategies, env, cost_model, tax_rates; parallel=false)::Dict{String, MyBacktestResult}
@@ -594,7 +669,7 @@ compare_strategies(strategies, env, cost_model, tax_rates; parallel=false)::Dict
 
 Strategies are independent; loop is trivially parallelizable via `Threads.@threads` (`parallel=true`). v1 ships sequential. Each strategy gets its own `MersenneTwister` derived from `BACKTEST_RNG_SEED` for reproducible MPC paths.
 
-### 7.4 `MyBacktestResult`
+### 8.4 `MyBacktestResult`
 
 ```julia
 struct MyBacktestResult
@@ -608,11 +683,11 @@ struct MyBacktestResult
     trades::Vector{NamedTuple}                     # one per fill
     trigger_log::Vector{MyMPCTrigger}              # empty for non-MPC strategies
     ledger::MyTaxLedger                            # final state with full closed_lots
-    summary::NamedTuple                            # metrics from §7.5
+    summary::NamedTuple                            # metrics from §8.5
 end
 ```
 
-### 7.5 Summary metrics (source spec §6.3)
+### 8.5 Summary metrics (source spec §6.3)
 
 ```
 ann_return        = (W_T/W_0)^(252/n_days) - 1                       # after-cost, after-tax
@@ -630,7 +705,7 @@ trigger_reasons             = (band_exit=, horizon_elapsed=, drawdown=)
 n_single_name_dd_15pct_days = ...               # source spec §4.3 failure-mode counter
 ```
 
-### 7.6 JLD2 schema (notebook contract)
+### 8.6 JLD2 schema (notebook contract)
 
 ```julia
 backtest_results.jld2 = Dict(
@@ -659,7 +734,7 @@ Notebook reads this and renders four things:
 3. **Trigger reason histogram** — band_exit / horizon_elapsed / drawdown counts for strategies 5 and 6.
 4. **Holding-period distribution per strategy** — pulls from `closed_lots`.
 
-### 7.7 Unit test contract
+### 8.7 Unit test contract
 
 | Test | Setup | Assertion |
 |---|---|---|
@@ -674,7 +749,7 @@ Notebook reads this and renders four things:
 
 ---
 
-## 8. Explicit non-goals for v1
+## 9. Explicit non-goals for v1
 
 | Item | Why deferred |
 |---|---|
@@ -692,7 +767,7 @@ Notebook reads this and renders four things:
 
 ---
 
-## 9. Reference materials
+## 10. Reference materials
 
 **Source spec:** `constrained_cobb_douglas.md` (this repo root) — the canonical strategy definition.
 
