@@ -91,7 +91,8 @@ modified_cobb_douglas_example/
 │   ├── 04_select_basket.jl              (median-Sharpe seed → frozen_basket.jld2)
 │   ├── 05_backtest_strategies.jl        (all 6 strategies on 2025-2026 → backtest_results.jld2)
 │   └── data/                            (artifacts written by scripts; gitignored except frozen_basket.jld2)
-│       └── .gitkeep
+│       ├── .gitkeep
+│       └── frozen_basket.jld2           (committed — small, the only artifact needed for headline reproducibility)
 └── eCornell-AI-Finance-S5-Example-ConstrainedCobbDouglas-May-2026.ipynb
                                           (notebook at repo root; Include.jl activates code/, loads JLD2s)
 ```
@@ -171,15 +172,14 @@ SIM.jl       :: estimate_sim, build_sim_covariance, compute_market_growth,
                 compute_ema, compute_lambda, compute_preference_weights,
                 ewls_init, ewls_update!
 Allocator.jl :: solve_constrained_cd, solve_unconstrained_cd_analytical,
-                solve_minvar_buyhold, solve_cost_aware_mv, equal_weight_target,
-                materialize_orders
+                solve_minvar_buyhold, solve_cost_aware_mv, equal_weight_target
 MPC.jl       :: forward_project, in_spec_band, check_trigger
 Costs.jl     :: build_cost_model, trade_cost
 Tax.jl       :: open_lot!, close_qty!, summarize_after_tax
 Bandit.jl    :: train_per_sector_bandit, monte_carlo_bandit,
                 select_median_seed, assemble_basket
 Backtest.jl  :: allocate, should_decide, run_backtest, compare_strategies,
-                summary_metrics
+                summary_metrics, materialize_orders
 Files.jl     :: load_ohlc_jld2, load_sector_map, save_results, load_results
 ```
 
