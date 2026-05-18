@@ -43,13 +43,14 @@ export trade_cost
 export open_lot!, close_qty!, summarize_after_tax
 export forward_project, forward_project_closed_form
 export check_trigger
+export assign_quotas, sector_relative_reward, train_sector_bandit, cd_basket_return
 
 include("SIM.jl")
 include("Allocator.jl")
 include("MPC.jl")
 include("Costs.jl")
 include("Tax.jl")
-# include("Bandit.jl")
+include("Bandit.jl")
 # include("Backtest.jl")
 # include("Files.jl")
 

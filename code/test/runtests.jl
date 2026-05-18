@@ -8,4 +8,5 @@ using ConstrainedCobbDouglas
     include("test_costs.jl")
     include("test_tax.jl")
     include("test_mpc.jl")
+    include("test_bandit.jl")
 end
