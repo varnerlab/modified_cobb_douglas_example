@@ -61,4 +61,70 @@ using ConstrainedCobbDouglas
             end
         end
     end
+
+    @testset "solve_constrained_cd: σ_max monotonicity" begin
+        γ = [0.5, 0.3, 0.2]
+        p = [100.0, 50.0, 25.0]
+        B = 10_000.0
+        βs = [1.0, 0.8, 1.3]
+        σ_m = 0.15
+        σ_εs = [0.20, 0.15, 0.25]
+        Σ = zeros(3, 3)
+        for i in 1:3, j in 1:3
+            Σ[i, j] = (i == j) ? βs[i]^2 * σ_m^2 + σ_εs[i]^2 : βs[i] * βs[j] * σ_m^2
+        end
+        function port_var(σ_max_val)
+            problem = MyConstrainedCDProblem(
+                γ = γ, p = p, B = B, Σ = Σ,
+                σ_max = σ_max_val, K_turnover = 1e12, w_max = 1.0,
+                n_prev = zeros(3), c̄ = 0.0)
+            r = solve_constrained_cd(problem)
+            return dot(r.w, Σ * r.w)
+        end
+        v_loose = port_var(0.50)
+        v_mid   = port_var(0.20)
+        v_tight = port_var(0.08)
+        @test v_loose >= v_mid - 1e-6
+        @test v_mid   >= v_tight - 1e-6
+    end
+
+    @testset "solve_constrained_cd: zero-turnover lock" begin
+        γ = [0.5, 0.3, 0.2]
+        p = [100.0, 50.0, 25.0]
+        B = 10_000.0
+        n_prev, _ = solve_unconstrained_cd_analytical(γ, p, B; ε = 1e-3)
+        problem = MyConstrainedCDProblem(
+            γ = γ, p = p, B = B, Σ = Matrix{Float64}(I, 3, 3) * 0.04,
+            σ_max = 1e6, K_turnover = 0.0, w_max = 1.0,
+            n_prev = n_prev, c̄ = 0.05)
+        r = solve_constrained_cd(problem)
+        @test r.status == :optimal
+        @test all(isapprox.(r.n, n_prev; atol = 1e-4))
+    end
+
+    @testset "solve_constrained_cd: concentration cap binds" begin
+        γ = [0.99, 0.005, 0.005]
+        p = [100.0, 50.0, 25.0]
+        B = 10_000.0
+        problem = MyConstrainedCDProblem(
+            γ = γ, p = p, B = B, Σ = Matrix{Float64}(I, 3, 3) * 0.04,
+            σ_max = 1e6, K_turnover = 1e12, w_max = 0.40,
+            n_prev = zeros(3), c̄ = 0.0)
+        r = solve_constrained_cd(problem)
+        @test r.status == :optimal
+        @test maximum(r.w) <= 0.40 + 1e-3
+    end
+
+    @testset "solve_constrained_cd: no-preferred fallback" begin
+        γ = [-0.1, -0.05, -0.2]
+        p = [100.0, 50.0, 25.0]
+        B = 10_000.0
+        problem = MyConstrainedCDProblem(
+            γ = γ, p = p, B = B, Σ = Matrix{Float64}(I, 3, 3) * 0.04,
+            σ_max = 1e6, K_turnover = 1e12, w_max = 1.0,
+            n_prev = zeros(3), c̄ = 0.0)
+        r = solve_constrained_cd(problem)
+        @test r.status == :no_preferred
+        @test r.unallocated_budget > 0.0
+    end
 end
