@@ -24,4 +24,33 @@ using ConstrainedCobbDouglas
         @test orders[1].ticker == "A"
         @test orders[1].qty == 20
     end
+
+    @testset "should_decide: buy-and-hold strategies only fire at t=1" begin
+        state = MyBacktestState()
+        state.date_idx = 1
+        @test should_decide(EqualWeightStrategy(), state, 1) == true
+        @test should_decide(MinVarBuyHoldStrategy(), state, 1) == true
+        state.date_idx = 5
+        @test should_decide(EqualWeightStrategy(), state, 5) == false
+        @test should_decide(MinVarBuyHoldStrategy(), state, 5) == false
+    end
+
+    @testset "should_decide: daily strategies fire every day" begin
+        state = MyBacktestState()
+        state.date_idx = 50
+        @test should_decide(UnconstrainedCDStrategy(), state, 50) == true
+        @test should_decide(CostAwareMVStrategy(κ = 5.0, c = 0.001), state, 50) == true
+    end
+
+    @testset "should_decide: MPC strategies fire on trigger or day 1" begin
+        spec = MyMPCSpec(z = 1.96, T = 21, N = 100, D_max = 0.20)
+        s5 = CDWithMPCStrategy(spec = spec)
+        state = MyBacktestState()
+        state.date_idx = 1; state.next_decision_due = false
+        @test should_decide(s5, state, 1) == true   # initial allocation
+        state.date_idx = 5; state.next_decision_due = false
+        @test should_decide(s5, state, 5) == false
+        state.next_decision_due = true
+        @test should_decide(s5, state, 5) == true
+    end
 end

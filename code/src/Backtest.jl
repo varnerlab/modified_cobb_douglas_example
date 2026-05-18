@@ -28,3 +28,67 @@ function materialize_orders(tickers::Vector{String}, n_target::Vector{Float64},
     end
     return orders
 end
+
+# --- Strategy dispatch ---
+
+should_decide(::EqualWeightStrategy, state::MyBacktestState, t::Int)::Bool = (t == 1)
+should_decide(::MinVarBuyHoldStrategy, state::MyBacktestState, t::Int)::Bool = (t == 1)
+should_decide(::UnconstrainedCDStrategy, state::MyBacktestState, t::Int)::Bool = true
+should_decide(::CostAwareMVStrategy, state::MyBacktestState, t::Int)::Bool = true
+should_decide(::CDWithMPCStrategy, state::MyBacktestState, t::Int)::Bool =
+    (t == 1) || state.next_decision_due
+should_decide(::ConstrainedCDWithMPCStrategy, state::MyBacktestState, t::Int)::Bool =
+    (t == 1) || state.next_decision_due
+
+"""
+    allocate(strategy, state, t, env) -> Vector{Float64}
+
+Return target share counts (length K). `env` carries γ_t, Σ_t, prices, B, n_prev
+information the strategy needs.
+"""
+function allocate(::EqualWeightStrategy, state::MyBacktestState, t::Int, env)::Vector{Float64}
+    K = length(state.prices)
+    w = equal_weight_target(K)
+    B = state.V_t
+    return (w .* B) ./ state.prices
+end
+
+function allocate(::MinVarBuyHoldStrategy, state::MyBacktestState, t::Int, env)::Vector{Float64}
+    K = length(state.prices)
+    bounds = [zeros(K) ones(K)]
+    w = solve_minvar_buyhold(env.Σ_t, bounds)
+    B = state.V_t
+    return (w .* B) ./ state.prices
+end
+
+function allocate(::UnconstrainedCDStrategy, state::MyBacktestState, t::Int, env)::Vector{Float64}
+    B = state.V_t
+    n, _ = solve_unconstrained_cd_analytical(env.γ_t, state.prices, B)
+    return n
+end
+
+function allocate(s::CostAwareMVStrategy, state::MyBacktestState, t::Int, env)::Vector{Float64}
+    B = state.V_t
+    w_prev = (state.positions .* state.prices) ./ max(B, 1e-8)
+    w = solve_cost_aware_mv(env.γ_t, env.Σ_t, w_prev; κ = s.κ, c = s.c)
+    return (w .* B) ./ state.prices
+end
+
+function allocate(::CDWithMPCStrategy, state::MyBacktestState, t::Int, env)::Vector{Float64}
+    B = state.V_t
+    n, _ = solve_unconstrained_cd_analytical(env.γ_t, state.prices, B)
+    return n
+end
+
+function allocate(s::ConstrainedCDWithMPCStrategy, state::MyBacktestState, t::Int, env)::Vector{Float64}
+    B = state.V_t
+    problem = MyConstrainedCDProblem(
+        γ = env.γ_t, p = state.prices, B = B, Σ = env.Σ_t,
+        σ_max = s.σ_max, K_turnover = s.K_turnover, w_max = s.w_max,
+        n_prev = state.positions, c̄ = env.c̄)
+    res = solve_constrained_cd(problem)
+    if res.status == :no_preferred || res.status == :solver_failed
+        return copy(state.positions)
+    end
+    return res.n
+end
