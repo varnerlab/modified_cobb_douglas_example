@@ -127,4 +127,14 @@ using ConstrainedCobbDouglas
         @test r.status == :no_preferred
         @test r.unallocated_budget > 0.0
     end
+
+    @testset "solve_cost_aware_mv produces a feasible weight vector" begin
+        γ = [0.4, 0.3, 0.2, 0.1]
+        Σ = Matrix{Float64}(I, 4, 4) * 0.04
+        w_prev = [0.25, 0.25, 0.25, 0.25]
+        w = solve_cost_aware_mv(γ, Σ, w_prev; κ = 5.0, c = 0.001)
+        @test length(w) == 4
+        @test sum(w) ≈ 1.0 atol=1e-6
+        @test all(w .>= -1e-8)
+    end
 end

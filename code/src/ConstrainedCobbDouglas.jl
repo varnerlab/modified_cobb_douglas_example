@@ -38,6 +38,7 @@ export compute_market_growth, compute_ema, compute_lambda, compute_preference_we
 export ewls_init, ewls_update!
 export solve_unconstrained_cd_analytical, equal_weight_target, solve_minvar_buyhold
 export solve_constrained_cd
+export solve_cost_aware_mv
 
 include("SIM.jl")
 include("Allocator.jl")

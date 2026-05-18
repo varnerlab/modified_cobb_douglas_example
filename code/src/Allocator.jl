@@ -187,3 +187,27 @@ function solve_constrained_cd(problem::MyConstrainedCDProblem;
         status = :optimal,
         objective = obj)
 end
+
+"""
+    solve_cost_aware_mv(γ, Σ, w_prev; κ, c) -> Vector{Float64}
+
+Strategy 4: max γᵀw - (κ/2) wᵀΣw - c·‖w - w_prev‖₁  s.t. Σwᵢ = 1, wᵢ ≥ 0.
+"""
+function solve_cost_aware_mv(γ::Vector{Float64}, Σ::Matrix{Float64},
+        w_prev::Vector{Float64}; κ::Float64, c::Float64)::Vector{Float64}
+    K = length(γ)
+    model = Model(Clarabel.Optimizer)
+    set_silent(model)
+    @variable(model, w[1:K] >= 0)
+    @variable(model, u[1:K] >= 0)
+    @constraint(model, sum(w) == 1.0)
+    for i in 1:K
+        @constraint(model, u[i] >=  w[i] - w_prev[i])
+        @constraint(model, u[i] >= -(w[i] - w_prev[i]))
+    end
+    @objective(model, Max, sum(γ[i] * w[i] for i in 1:K)
+                          - (κ / 2.0) * w' * Σ * w
+                          - c * sum(u))
+    optimize!(model)
+    return value.(w)
+end
