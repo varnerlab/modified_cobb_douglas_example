@@ -41,10 +41,11 @@ export solve_constrained_cd
 export solve_cost_aware_mv
 export trade_cost
 export open_lot!, close_qty!, summarize_after_tax
+export forward_project, forward_project_closed_form
 
 include("SIM.jl")
 include("Allocator.jl")
-# include("MPC.jl")
+include("MPC.jl")
 include("Costs.jl")
 include("Tax.jl")
 # include("Bandit.jl")
