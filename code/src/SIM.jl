@@ -49,3 +49,68 @@ function build_sim_covariance(sim_estimates::Vector{MySIMParameterEstimate},
     end
     return Σ
 end
+
+# --- compute_market_growth, compute_ema, compute_lambda vendored
+# from Compute.jl lines 360-460. ---
+
+"""
+    compute_market_growth(prices; Δt = 1/252) -> Vector{Float64}
+
+Annualized log-returns of a price series.
+"""
+function compute_market_growth(prices::Vector{Float64};
+        Δt::Float64 = 1.0 / 252.0)::Vector{Float64}
+    T = length(prices)
+    g = zeros(T - 1)
+    for t ∈ 1:T-1
+        g[t] = log(prices[t+1] / prices[t]) / Δt
+    end
+    return g
+end
+
+"""
+    compute_ema(prices; window = 21) -> Vector{Float64}
+
+Exponential moving average with span = window.
+"""
+function compute_ema(prices::Vector{Float64}; window::Int = 21)::Vector{Float64}
+    α = 2.0 / (window + 1.0)
+    ema = similar(prices)
+    ema[1] = prices[1]
+    for t ∈ 2:length(prices)
+        ema[t] = α * prices[t] + (1.0 - α) * ema[t-1]
+    end
+    return ema
+end
+
+"""
+    compute_lambda(short_ema, long_ema; θ = 0.5) -> Vector{Float64}
+
+Regime-lens λ from EMA crossover. λ_t = 1 / (1 + exp(-(short-long)/θ)) (sigmoid).
+"""
+function compute_lambda(short_ema::Vector{Float64}, long_ema::Vector{Float64};
+        θ::Float64 = 0.5)::Vector{Float64}
+    @assert length(short_ema) == length(long_ema)
+    diff = (short_ema .- long_ema) ./ θ
+    return 1.0 ./ (1.0 .+ exp.(-diff))
+end
+
+"""
+    compute_preference_weights(sim_parameters, tickers, gm_t, lambda) -> Vector{Float64}
+
+No-news variant of the lectures function (spec §3.3).
+γ_i = tanh(α_i/|β|^λ + |β|^(1-λ) · gm_t)
+"""
+function compute_preference_weights(
+        sim_parameters::Dict{String,Tuple{Float64,Float64,Float64}},
+        tickers::Vector{String}, gm_t::Float64, lambda::Float64)::Vector{Float64}
+    K = length(tickers)
+    γ = zeros(K)
+    for i in 1:K
+        (αᵢ, βᵢ, _) = sim_parameters[tickers[i]]
+        RF = max(abs(βᵢ)^lambda, 1e-8)
+        g_hat = αᵢ / RF + (abs(βᵢ)^(1.0 - lambda)) * gm_t
+        γ[i] = tanh(g_hat)
+    end
+    return γ
+end

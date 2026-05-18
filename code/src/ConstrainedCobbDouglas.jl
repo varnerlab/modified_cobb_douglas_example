@@ -34,6 +34,7 @@ export MyAllocationStrategy, EqualWeightStrategy, MinVarBuyHoldStrategy,
 export MyBanditConfig, MyBanditResult
 export MyBacktestState, MyBacktestResult
 export estimate_sim, build_sim_covariance
+export compute_market_growth, compute_ema, compute_lambda, compute_preference_weights
 
 include("SIM.jl")
 # include("Allocator.jl")

@@ -34,4 +34,35 @@ using ConstrainedCobbDouglas
         @test Σ[1, 1] ≈ 1.0^2 * 0.15^2 + 0.2^2
         @test Σ[1, 2] ≈ 1.0 * 0.8 * 0.15^2
     end
+
+    @testset "compute_market_growth annualizes log-returns" begin
+        prices = [100.0, 101.0, 100.5, 102.0]
+        g = compute_market_growth(prices; Δt = 1.0 / 252.0)
+        @test length(g) == 3
+        @test g[1] ≈ log(101.0 / 100.0) / (1.0 / 252.0)
+    end
+
+    @testset "compute_ema length and bounds" begin
+        prices = collect(100.0:1.0:300.0)
+        ema = compute_ema(prices; window = 21)
+        @test length(ema) == length(prices)
+        @test ema[end] > prices[1]
+        @test ema[end] < prices[end]
+    end
+
+    @testset "compute_lambda is bounded in [0,1]" begin
+        prices = collect(100.0:1.0:300.0)
+        short_ema = compute_ema(prices; window = 21)
+        long_ema  = compute_ema(prices; window = 63)
+        λ = compute_lambda(short_ema, long_ema)
+        @test all(0.0 .<= λ .<= 1.0)
+    end
+
+    @testset "compute_preference_weights returns tanh-bounded γ" begin
+        sim_params = Dict("A" => (0.05, 1.0, 0.2), "B" => (0.10, 1.5, 0.3))
+        tickers = ["A", "B"]
+        γ = compute_preference_weights(sim_params, tickers, 0.08, 0.5)
+        @test length(γ) == 2
+        @test all(-1.0 .<= γ .<= 1.0)
+    end
 end
