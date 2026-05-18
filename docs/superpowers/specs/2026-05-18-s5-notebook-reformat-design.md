@@ -15,12 +15,13 @@ Reformat the S5 notebook into the four-section layout used by the S4 bandit note
 
 ## 1. Motivation
 
-The current S5 notebook has four structural problems against the target pattern:
+The current S5 notebook has five structural problems against the target pattern:
 
 1. **Theory Recap is gutted.** `## Section 1: Theory Recap` contains a single-line pointer to `docs/superpowers/specs/2026-05-17-constrained-cobb-douglas-design.md`. The reader cannot follow the notebook without opening the spec.
 2. **Results is fragmented across four top-level headers.** `## Section 2: Headline Bake-Off`, `## Section 3: Wealth Curves`, `## Section 4: MPC Trigger Reasons`, `## Section 5: Multi-Seed Backtest Distribution` are sibling top-level sections rather than subsections of a single Results block.
 3. **No Summary.** The notebook ends with `## Disclaimer` at top level; there is no synthesis paragraph or Key Takeaways block.
 4. **No visibility into the frozen basket.** The notebook loads `frozen_basket.jld2` but never shows the reader which 22 tickers (in current state) or 33 tickers (after Phase A) make up the basket, or how they distribute across GICS sectors.
+5. **Single-seed displays are not anchored to the MC distribution.** The notebook's wealth curves and trigger-reason histogram source from `backtest_results.jld2` (script 05, single seed = `BACKTEST_RNG_SEED = 2026`). The Sharpe histogram below them sources from `backtest_mc_results.jld2` (script 06, seeds `2001:2020`). The single seed used for visualizations is outside the MC range, so the wealth curve the reader sees has no statistical relationship to any point in the MC distribution.
 
 The bandit notebook resolves all four through its four-section layout. The reformat mirrors that layout exactly.
 
@@ -40,7 +41,7 @@ The bandit notebook resolves all four through its four-section layout. The refor
 ### Out of scope
 
 - Changes to the constrained CD solver, MPC trigger logic, cost model, or tax model. None of these are touched.
-- Changes to scripts `01_calibrate_sim.jl` (universe-independent SIM fit), `02_train_bandit.jl` (dev-only smoke test; output is downstream-orphaned).
+- Re-running `01_calibrate_sim.jl` (universe-independent SIM fit; existing artifact stays valid), `02_train_bandit.jl` (dev-only smoke test; output is downstream-orphaned), and `05_backtest_strategies.jl` (redundant with `06_backtest_mc.jl`, which saves the same per-strategy artifacts × 20 seeds — see §3.2).
 - Re-training the SIM. Calibration is per-ticker; basket size changes do not invalidate `sim_calibration.jld2`.
 - Adding new strategies, new metrics, new figures beyond what the current notebook already produces.
 - Documenter.jl docs site regeneration. (May be triggered separately if needed.)
@@ -66,13 +67,31 @@ const K_BASKET = 33    # after
 |---|---|---|---|
 | 03 | `03_train_bandit_mc.jl` | overwrites `per_sector_bandit_mc_results.jld2` | 30 seeds (1001:1030), per-sector trainer |
 | 04 | `04_select_basket.jl` | overwrites `frozen_basket.jld2` | picks median-score seed; `tickers` now length 33 |
-| 05 | `05_backtest_strategies.jl` | overwrites `backtest_results.jld2` | single-seed (`BACKTEST_RNG_SEED = 2026`) over 6 strategies |
-| 06 | `06_backtest_mc.jl` | overwrites `backtest_mc_results.jld2` | 20-seed (2001:2020) MC backtest over 6 strategies |
+| 06 | `06_backtest_mc.jl` | overwrites `backtest_mc_results.jld2` | 20-seed (2001:2020) MC backtest over 6 strategies; saves both per-strategy summary vectors AND `per_seed_results` (the full `MyBacktestResult` per (seed, strategy) including wealth path and trigger log) |
 
-`01_calibrate_sim.jl` is **skipped** — SIM fit is per-ticker, universe-independent.
-`02_train_bandit.jl` is **skipped** — output `per_sector_bandit_results.jld2` is not consumed by any downstream script (verified: `04_select_basket.jl:12` loads only the MC results from script 03). The stale K=22 artifact on disk is left alone; nothing reads it.
+**Three scripts skipped:**
 
-### 3.3 Phase A acceptance criteria
+- `01_calibrate_sim.jl` — SIM fit is per-ticker, universe-independent. The existing `sim_calibration.jld2` stays valid.
+- `02_train_bandit.jl` — output `per_sector_bandit_results.jld2` is not consumed by any downstream script (verified: `04_select_basket.jl:12` loads only the MC results from script 03). The stale K=22 artifact on disk is left alone.
+- `05_backtest_strategies.jl` — produces `backtest_results.jld2`, a single-seed (`BACKTEST_RNG_SEED = 2026`) version of what script 06 already saves for 20 seeds. Worse, seed 2026 is outside the MC range (`2001:2020`), so the single-seed displays the notebook draws from 05 cannot be located in the MC distribution drawn from 06. The cleaner design (§4.4) sources single-seed displays from 06's `per_seed_results` at a **canonical reporting seed** instead — see §3.4.
+
+### 3.3 Canonical reporting seed
+
+The notebook needs a single seed's worth of artifacts for displays that don't carry a distribution: the Headline Bake-Off table (mixed deterministic + median rows), the Wealth Curves plot, and the MPC Trigger Reasons histogram. We pick the seed whose `ConstrainedCDWithMPCStrategy` Sharpe equals the median of the 20-seed Sharpe vector — pinned in the notebook, computed at load time:
+
+```julia
+sharpes = bt_mc["summary"]["ConstrainedCDWithMPCStrategy"]["sharpe_mc"]
+seeds   = bt_mc["config"]["BACKTEST_MC_SEEDS"]
+order   = sortperm(sharpes)
+mid_idx = order[ceil(Int, length(order) / 2)]
+canonical_seed_idx = mid_idx                    # 1-based index into per_seed_results
+canonical_seed     = seeds[mid_idx]             # the seed integer itself
+canonical          = bt_mc["per_seed_results"][canonical_seed_idx]   # Dict{String,MyBacktestResult}
+```
+
+This mirrors `04_select_basket.jl`'s pattern — same median-Sharpe logic, different stochastic layer. The deterministic strategies' results are identical across all 20 seeds, so the choice of seed is moot for them; it only matters for the two MPC strategies.
+
+### 3.4 Phase A acceptance criteria
 
 After step 04 completes:
 
@@ -83,7 +102,7 @@ basket = load_results("scripts/data/frozen_basket.jld2")
 @assert length(basket["sector_quotas"]) == 11
 ```
 
-After step 06 completes: `backtest_mc_results.jld2` contains `summary` keys for all six strategy names (`EqualWeightStrategy`, `MinVarStrategy`, `UnconstrainedCDStrategy`, `CostAwareMVStrategy`, `CDWithMPCStrategy`, `ConstrainedCDWithMPCStrategy`).
+After step 06 completes: `backtest_mc_results.jld2` contains `summary` keys for all six strategy names (`EqualWeightStrategy`, `MinVarBuyHoldStrategy`, `UnconstrainedCDStrategy`, `CostAwareMVStrategy`, `CDWithMPCStrategy`, `ConstrainedCDWithMPCStrategy`), and `per_seed_results` is a 20-element vector with each element a `Dict{String,MyBacktestResult}` over the same six keys.
 
 ---
 
@@ -186,8 +205,7 @@ Closing prose: pairwise comparisons isolate effects. **(3) vs (5)** isolates tri
 
 - `scripts/01_calibrate_sim.jl` → `sim_calibration.jld2`
 - `scripts/04_select_basket.jl` → `frozen_basket.jld2` (with `03_train_bandit_mc.jl` upstream)
-- `scripts/05_backtest_strategies.jl` → `backtest_results.jld2`
-- `scripts/06_backtest_mc.jl` → `backtest_mc_results.jld2`
+- `scripts/06_backtest_mc.jl` → `backtest_mc_results.jld2` (the notebook reads both `summary` and `per_seed_results`)
 
 ### 4.4 Results section — cell-by-cell layout
 
@@ -197,21 +215,21 @@ Closing prose: pairwise comparisons isolate effects. **(3) vs (5)** isolates tri
 |---|---|---|---|
 | 1 | md | NEW | `## Section 2: Results` header + 50-word framing prose + Data-Windows blockquote (see 4.4.1) |
 | 2 | code | KEEP | `include("Include.jl")` (unchanged) |
-| 3 | code | EDIT | Load three artifacts (`sim_calibration.jld2`, `frozen_basket.jld2`, `backtest_results.jld2`). **Drop** the `println("Basket: ", basket["tickers"])` line. Keep the hold-out window println. |
+| 3 | code | EDIT | Load three artifacts: `sim_calibration.jld2`, `frozen_basket.jld2`, `backtest_mc_results.jld2` (no `backtest_results.jld2`). Compute the canonical reporting seed (§3.3 code block). **Drop** the `println("Basket: ", basket["tickers"])` line. Keep the hold-out window println. |
 | 4 | md | NEW | `### Frozen Basket: Tickers and GICS Sectors` + framing prose |
 | 5 | code | NEW | Sector roster code (see 4.4.2) |
-| 6 | md | EDIT | `### Headline Bake-Off (after-cost, after-tax)` (demoted from `## Section 2:`) + 50-word framing prose pointing at the pairwise comparison rows |
-| 7 | code | KEEP | `pretty_table` of the bake-off rows (unchanged) |
-| 8 | md | EDIT | `### Wealth Curves` (demoted from `## Section 3:`) + 25-word framing prose |
-| 9 | code | KEEP | wealth-curve plot (unchanged) |
-| 10 | md | EDIT | `### MPC Trigger Reasons` (demoted from `## Section 4:`) + 50-word framing prose |
-| 11 | code | KEEP | trigger-reason print (unchanged) |
+| 6 | md | EDIT | `### Headline Bake-Off (after-cost, after-tax)` (demoted from `## Section 2:`) + 50-word framing prose pointing at the pairwise comparison rows AND noting that each metric is the **median across the 20 MC seeds** (which collapses to the single value for the four deterministic strategies) |
+| 7 | code | EDIT | `pretty_table` of bake-off rows. Source change: iterate strategies from `bt_mc["per_seed_results"][1]` for the strategy keys; for each strategy, compute the median across the 20 seeds for `ann_sharpe`, `ann_return`, `max_drawdown`, `ann_turnover`, `n_mpc_triggers`. Sort by median Sharpe descending. (See 4.4.3.) |
+| 8 | md | EDIT | `### Wealth Curves` (demoted from `## Section 3:`) + 25-word framing prose noting the curves are the canonical seed's paths |
+| 9 | code | EDIT | Wealth-curve plot. Source change: iterate `canonical[name].wealth_after_cost_aftertax` over the 6 strategies; deterministic strategies' curves are seed-invariant, MPC curves are the median-Sharpe seed's path. (See 4.4.4.) |
+| 10 | md | EDIT | `### MPC Trigger Reasons` (demoted from `## Section 4:`) + 50-word framing prose; mention the trigger log is for the canonical seed |
+| 11 | code | EDIT | Trigger-reason print. Source change: iterate `canonical[name].trigger_log` (only the two MPC strategies have non-empty logs). Logic identical otherwise. |
 | 12 | md | EDIT | `### Multi-Seed Backtest Distribution` (demoted from `## Section 5:`); existing prose mostly preserved |
-| 13 | code | KEEP | MC summary table (unchanged) |
+| 13 | code | KEEP | MC summary table (unchanged — already sources from `bt_mc["summary"]`) |
 | 14 | md | EDIT | `#### Sharpe distribution histogram — ConstrainedCDWithMPCStrategy` (demoted from `###`) + 25-word framing prose |
-| 15 | code | KEEP | histogram (unchanged) |
+| 15 | code | KEEP | histogram (unchanged — already sources from `bt_mc["summary"]`) |
 
-**No code cells are reordered or deleted.** Only markdown headers move and four new pieces appear (Section 2 opener, Frozen Basket subsection header + code, and additional prose around existing code cells).
+**No code cells are reordered or deleted.** Markdown headers move; four code cells (rows 3, 7, 9, 11) change their data source from the dropped `backtest_results.jld2` to `bt_mc["per_seed_results"]` at the canonical seed (or median-across-seeds for the bake-off); a new Frozen Basket subsection + roster code appears.
 
 #### 4.4.1 Section 2 opener — Data Windows blockquote content
 
@@ -239,6 +257,56 @@ pretty_table(roster; backend = :text)
 ```
 
 Both `load_sector_map` and `_PATH_TO_INPUTS` are already available from `Include.jl` (`using ConstrainedCobbDouglas` and the const at line 4 respectively). No new infrastructure.
+
+#### 4.4.3 Headline Bake-Off code (median across MC seeds)
+
+```julia
+strat_names = sort(collect(keys(bt_mc["per_seed_results"][1])))
+rows = NamedTuple[]
+for name in strat_names
+    sharpes  = [bt_mc["per_seed_results"][i][name].summary.ann_sharpe     for i in 1:n_seeds]
+    rets     = [bt_mc["per_seed_results"][i][name].summary.ann_return     for i in 1:n_seeds]
+    dds      = [bt_mc["per_seed_results"][i][name].summary.max_drawdown   for i in 1:n_seeds]
+    turns    = [bt_mc["per_seed_results"][i][name].summary.ann_turnover   for i in 1:n_seeds]
+    ntrigs   = [bt_mc["per_seed_results"][i][name].summary.n_mpc_triggers for i in 1:n_seeds]
+    push!(rows, (Strategy = name,
+        Sharpe_med    = round(median(sharpes); digits = 3),
+        AnnRet_med_pct = round(median(rets) * 100; digits = 2),
+        MaxDD_med_pct  = round(median(dds)  * 100; digits = 1),
+        Turn_med       = round(median(turns); digits = 3),
+        N_trig_med     = round(median(ntrigs); digits = 0)))
+end
+sort!(rows; by = r -> -r.Sharpe_med)
+pretty_table(DataFrame(rows); backend = :text)
+```
+
+For the four deterministic strategies (`EqualWeightStrategy`, `MinVarBuyHoldStrategy`, `UnconstrainedCDStrategy`, `CostAwareMVStrategy`), every seed in the vector is identical, so the median equals the single value. For the two MPC strategies, the median is the honest middle of the 20-seed distribution.
+
+#### 4.4.4 Wealth Curves and Trigger Reasons sourcing
+
+```julia
+# Wealth curves — canonical seed's path for each strategy
+p = plot(legend = :outerright, size = (1080, 540),
+         xlabel = "Trading day",
+         ylabel = "Wealth (after-cost, after-tax)")
+for (name, r) in canonical
+    plot!(p, r.wealth_after_cost_aftertax; label = name, lw = 1.4)
+end
+p
+
+# Trigger reasons — canonical seed's log for each strategy
+for (name, r) in canonical
+    if !isempty(r.trigger_log)
+        reasons = [t.reason for t in r.trigger_log if t.fired]
+        if !isempty(reasons)
+            counts = Dict(rs => count(==(rs), reasons) for rs in unique(reasons))
+            println(rpad(name, 35), "  ", counts)
+        end
+    end
+end
+```
+
+`canonical` is `bt_mc["per_seed_results"][canonical_seed_idx]` from the load cell (§3.3). The code shape is identical to today's notebook; only the data source changes (no more `bt["results"]`).
 
 ### 4.5 Summary cell
 
@@ -288,7 +356,7 @@ Trailing `___` horizontal rule matches the bandit notebook's footer.
 
 ## 6. Order of operations
 
-1. Phase A: edit `K_BASKET = 33` in `03_train_bandit_mc.jl`; run `03 → 04 → 05 → 06`; verify Phase A acceptance.
+1. Phase A: edit `K_BASKET = 33` in `03_train_bandit_mc.jl`; run `03 → 04 → 06` (skip 01, 02, 05 per §3.2); verify Phase A acceptance.
 2. Phase B: open `eCornell-AI-Finance-S5-Example-ConstrainedCobbDouglas-May-2026.ipynb`; apply the cell-by-cell edits from §4; resolve all `{...}` placeholders from the freshly-saved artifacts; execute the notebook end-to-end; verify Phase B acceptance.
 3. Commit Phase A artifact diffs and Phase B notebook diff as separate commits (Phase A: data; Phase B: notebook + prose).
 
