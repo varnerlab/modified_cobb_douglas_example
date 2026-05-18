@@ -48,3 +48,27 @@ function close_qty!(ledger::MyTaxLedger, ticker::String, qty_to_close::Int,
     remaining > 0 && error("close_qty!: attempted to close more shares than open for $ticker")
     return nothing
 end
+
+"""
+    summarize_after_tax(ledger, rates::NamedTuple) -> NamedTuple
+
+Symmetric tax model: losses generate credits at the category rate.
+"""
+function summarize_after_tax(ledger::MyTaxLedger,
+        rates::NamedTuple)::NamedTuple
+    tax_st = rates.st * ledger.realized_st_pnl
+    tax_lt = rates.lt * ledger.realized_lt_pnl
+    total_tax = tax_st + tax_lt
+    realized = ledger.realized_st_pnl + ledger.realized_lt_pnl
+    lt_share = realized != 0.0 ? ledger.realized_lt_pnl / realized : 0.0
+    hp = [lot.holding_days for lot in ledger.closed_lots]
+    return (
+        realized_st_pnl = ledger.realized_st_pnl,
+        realized_lt_pnl = ledger.realized_lt_pnl,
+        tax_st = tax_st,
+        tax_lt = tax_lt,
+        total_tax = total_tax,
+        after_tax_realized_pnl = realized - total_tax,
+        lt_share_of_realized = lt_share,
+        holding_period_distribution = hp)
+end

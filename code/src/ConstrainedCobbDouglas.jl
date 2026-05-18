@@ -40,7 +40,7 @@ export solve_unconstrained_cd_analytical, equal_weight_target, solve_minvar_buyh
 export solve_constrained_cd
 export solve_cost_aware_mv
 export trade_cost
-export open_lot!, close_qty!
+export open_lot!, close_qty!, summarize_after_tax
 
 include("SIM.jl")
 include("Allocator.jl")
