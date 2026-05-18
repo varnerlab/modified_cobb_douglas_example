@@ -1,12 +1,57 @@
 """
     load_ohlc_jld2(path) -> NamedTuple
 
-Load a lectures-style OHLC JLD2 file. Returns (prices::Matrix, dates::Vector{Date},
-tickers::Vector{String}, volumes::Matrix). Schema follows what the lectures
-repo writes; missing fields are returned as empty.
+Load a lectures-style OHLC JLD2 file. Returns `(prices, dates, tickers, volumes)`
+where `prices` and `volumes` are `T × K` matrices, `dates` is a `Vector{Date}`
+of length `T`, and `tickers` is a `Vector{String}` of length `K`.
+
+Schema actually used by the lectures repo: the file has a single top-level
+key `"dataset"` whose value is a `Dict{String, DataFrame}` keyed by ticker.
+Each per-ticker `DataFrame` has columns `open, close, high, low, volume,
+timestamp, volume_weighted_average_price, number_of_transactions`. The
+`timestamp` column is `DateTime` at 05:00:00 UTC; we project to `Date`.
+
+Only tickers with the modal (maximum) number of rows and timestamps matching
+the reference timeline are kept — i.e. tickers with partial coverage
+(IPO/delisting) are dropped here so that the returned matrices are
+rectangular. Downstream code can apply additional universe filters.
+
+Falls back to the older flat-key schema (`"close"`, `"dates"`, etc.) when the
+`"dataset"` key is absent, so legacy fixtures still load.
 """
 function load_ohlc_jld2(path::String)::NamedTuple
     d = load(path)
+    if haskey(d, "dataset") && isa(d["dataset"], Dict)
+        ds = d["dataset"]::Dict{String,DataFrame}
+        # Pick the modal row count as the reference timeline; this is the set
+        # of tickers with full coverage over the file's date range.
+        nrows = [nrow(df) for df in values(ds)]
+        T_ref = maximum(nrows)
+        # Choose a reference ticker with T_ref rows to fix the timeline.
+        ref_ticker = first(k for (k, df) in ds if nrow(df) == T_ref)
+        ref_ts = ds[ref_ticker].timestamp
+        dates  = Date.(ref_ts)
+
+        tickers = String[]
+        for (k, df) in ds
+            if nrow(df) == T_ref && df.timestamp == ref_ts
+                push!(tickers, k)
+            end
+        end
+        sort!(tickers)
+        K = length(tickers)
+        prices  = Matrix{Float64}(undef, T_ref, K)
+        volumes = Matrix{Float64}(undef, T_ref, K)
+        for (j, tk) in enumerate(tickers)
+            df = ds[tk]
+            prices[:, j]  = Float64.(df.close)
+            volumes[:, j] = Float64.(df.volume)
+        end
+        return (prices = prices, dates = dates,
+                tickers = tickers, volumes = volumes)
+    end
+
+    # Legacy flat-key fallback.
     function pick(keys...)
         for k in keys
             haskey(d, k) && return d[k]
