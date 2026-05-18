@@ -42,6 +42,7 @@ export solve_cost_aware_mv
 export trade_cost
 export open_lot!, close_qty!, summarize_after_tax
 export forward_project, forward_project_closed_form
+export check_trigger
 
 include("SIM.jl")
 include("Allocator.jl")

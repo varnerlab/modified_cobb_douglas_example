@@ -86,3 +86,35 @@ function forward_project(state, spec::MyMPCSpec, env)::MyMPCProjection
         closed_form_σ = cf_σ,
         divergence_warning = div_warn)
 end
+
+"""
+    check_trigger(state, spec::MyMPCSpec) -> MyMPCTrigger
+
+Three conditions (any one fires):
+  1. V_t outside band [μ_τ ± z·σ_τ]
+  2. τ >= spec.T (horizon refresh)
+  3. drawdown > spec.D_max (circuit breaker)
+"""
+function check_trigger(state, spec::MyMPCSpec)::MyMPCTrigger
+    proj = state.last_projection
+    τ = state.date_idx - state.last_decision_t
+    if proj === nothing || τ <= 0
+        return MyMPCTrigger(fired = false, reason = :in_spec, τ = max(τ, 0))
+    end
+    # Drawdown first — circuit breaker
+    if state.wealth_peak > 0.0
+        dd = (state.wealth_peak - state.V_t) / state.wealth_peak
+        if dd > spec.D_max
+            return MyMPCTrigger(fired = true, reason = :drawdown, τ = τ)
+        end
+    end
+    if τ >= spec.T
+        return MyMPCTrigger(fired = true, reason = :horizon_elapsed, τ = τ)
+    end
+    τ_clamped = min(τ, length(proj.μ))
+    μτ = proj.μ[τ_clamped]; στ = proj.σ[τ_clamped]
+    if state.V_t < μτ - spec.z * στ || state.V_t > μτ + spec.z * στ
+        return MyMPCTrigger(fired = true, reason = :band_exit, τ = τ)
+    end
+    return MyMPCTrigger(fired = false, reason = :in_spec, τ = τ)
+end
