@@ -287,3 +287,22 @@ function summary_metrics(state::MyBacktestState, tax_summary::NamedTuple)::Named
             0 : Int(round(median(tax_summary.holding_period_distribution))),
         n_mpc_triggers = n_trig)
 end
+
+"""
+    compare_strategies(strategies, env, cost_model, tax_rates;
+                       B₀ = 100_000.0, rng_seed = 42, parallel = false)
+                       -> Dict{String, MyBacktestResult}
+"""
+function compare_strategies(strategies::Vector{<:MyAllocationStrategy}, env,
+        cost_model::MyCostModel, tax_rates::NamedTuple;
+        B₀::Float64 = 100_000.0, rng_seed::Int = 42,
+        parallel::Bool = false)::Dict{String,MyBacktestResult}
+    results = Dict{String,MyBacktestResult}()
+    for (i, s) in enumerate(strategies)
+        name = string(typeof(s).name.name)
+        seed_i = rng_seed + 1000 * i
+        results[name] = run_backtest(s, env, cost_model, tax_rates;
+                                     B₀ = B₀, rng_seed = seed_i)
+    end
+    return results
+end

@@ -88,4 +88,34 @@ using ConstrainedCobbDouglas
         @test res1.wealth_after_cost_pretax == res2.wealth_after_cost_pretax
         @test length(res1.wealth_after_cost_pretax) == n_days
     end
+
+    @testset "compare_strategies runs all strategies sequentially" begin
+        Random.seed!(2)
+        K = 4; n_days = 30
+        tickers = ["A","B","C","D"]
+        prices = zeros(n_days, K)
+        prices[1, :] = [100.0, 50.0, 25.0, 200.0]
+        for t in 2:n_days, i in 1:K
+            prices[t, i] = prices[t-1, i] * (1.0 + 0.0005 + 0.001 * randn())
+        end
+        sim_init = Dict(tickers[i] => ewls_init(0.0, 1.0, 0.1; half_life = 21.0, prior_weight = 21.0)
+                        for i in 1:K)
+        env = (tickers = tickers, prices = prices,
+               market_prices = vec(mean(prices; dims = 2)),
+               volumes = fill(1e9, n_days, K),
+               sim_params_init = sim_init, σ_m = 0.10,
+               dates = [Date(2025,1,2) + Day(t-1) for t in 1:n_days],
+               market_model = nothing, c̄ = 0.05)
+        cm = MyCostModel(commission_per_trade = 0.0, half_spread_bps = 5.0,
+                         slippage_κ = 0.001,
+                         adv = Dict(t => 1e9 for t in tickers))
+        rates = (st = 0.37, lt = 0.20)
+        strategies = MyAllocationStrategy[
+            EqualWeightStrategy(),
+            UnconstrainedCDStrategy()]
+        results = compare_strategies(strategies, env, cm, rates; B₀ = 100_000.0, rng_seed = 42)
+        @test haskey(results, "EqualWeightStrategy")
+        @test haskey(results, "UnconstrainedCDStrategy")
+        @test results["EqualWeightStrategy"].wealth_after_cost_pretax[1] == 100_000.0
+    end
 end

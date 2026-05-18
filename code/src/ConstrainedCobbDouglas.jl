@@ -48,6 +48,7 @@ export load_ohlc_jld2, load_sector_map, save_results, load_results
 export materialize_orders
 export should_decide, allocate
 export run_backtest, summary_metrics
+export compare_strategies
 
 include("SIM.jl")
 include("Allocator.jl")
