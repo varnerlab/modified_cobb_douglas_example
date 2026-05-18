@@ -45,6 +45,7 @@ export forward_project, forward_project_closed_form
 export check_trigger
 export assign_quotas, sector_relative_reward, train_sector_bandit, cd_basket_return
 export load_ohlc_jld2, load_sector_map, save_results, load_results
+export materialize_orders
 
 include("SIM.jl")
 include("Allocator.jl")
@@ -52,7 +53,7 @@ include("MPC.jl")
 include("Costs.jl")
 include("Tax.jl")
 include("Bandit.jl")
-# include("Backtest.jl")
+include("Backtest.jl")
 include("Files.jl")
 
 end # module
