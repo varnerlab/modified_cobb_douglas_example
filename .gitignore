@@ -8,6 +8,9 @@ deps/build.log
 code/Manifest.toml
 docs/Manifest.toml
 
+# Documenter.jl build output
+docs/build/
+
 # Generated artifacts
 scripts/data/*.jld2
 !scripts/data/.gitkeep
