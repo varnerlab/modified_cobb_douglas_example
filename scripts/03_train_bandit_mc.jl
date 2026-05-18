@@ -11,7 +11,7 @@ using Statistics
 const PATH_INPUTS = joinpath(@__DIR__, "..", "code", "src", "data")
 const PATH_OUT = joinpath(@__DIR__, "data")
 const BANDIT_MC_SEEDS = 1001:1030
-const K_BASKET = 22
+const K_BASKET = 33
 const ITERS_PER_ARM = 50
 const ITERS_MAX = 5000
 const ITERS_MIN = 500
