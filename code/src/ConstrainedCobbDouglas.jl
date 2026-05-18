@@ -37,6 +37,7 @@ export estimate_sim, build_sim_covariance
 export compute_market_growth, compute_ema, compute_lambda, compute_preference_weights
 export ewls_init, ewls_update!
 export solve_unconstrained_cd_analytical, equal_weight_target, solve_minvar_buyhold
+export solve_constrained_cd
 
 include("SIM.jl")
 include("Allocator.jl")
