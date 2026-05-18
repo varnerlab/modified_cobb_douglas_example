@@ -39,11 +39,12 @@ export ewls_init, ewls_update!
 export solve_unconstrained_cd_analytical, equal_weight_target, solve_minvar_buyhold
 export solve_constrained_cd
 export solve_cost_aware_mv
+export trade_cost
 
 include("SIM.jl")
 include("Allocator.jl")
 # include("MPC.jl")
-# include("Costs.jl")
+include("Costs.jl")
 # include("Tax.jl")
 # include("Bandit.jl")
 # include("Backtest.jl")
