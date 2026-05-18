@@ -107,7 +107,7 @@ function solve_constrained_cd(problem::MyConstrainedCDProblem;
         set_silent(m)
         @variable(m, n[1:Kp] >= 1e-8)
         @variable(m, t[1:Kp])
-        # log epigraph via exponential cone: t ≤ log(n)  ⇔  (t, 1, n) ∈ ExpCone
+        # log hypograph via exponential cone: t ≤ log(n)  ⇔  (t, 1, n) ∈ ExpCone
         for k in 1:Kp
             @constraint(m, [t[k], 1.0, n[k]] in MOI.ExponentialCone())
         end
@@ -167,7 +167,7 @@ function solve_constrained_cd(problem::MyConstrainedCDProblem;
         return MyConstrainedCDResult(
             n = copy(n_prev),
             w = (n_prev .* p) ./ B,
-            unallocated_budget = 0.0,
+            unallocated_budget = max(0.0, B - sum(n_prev .* p)),
             duals = (σ_max = 0.0, turnover = 0.0, w_max = 0.0),
             status = :solver_failed,
             objective = 0.0)
