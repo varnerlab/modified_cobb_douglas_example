@@ -24,3 +24,6 @@ scripts/data/*.jld2
 
 # Editor
 .vscode/
+
+# Agent/session state
+.claude/
