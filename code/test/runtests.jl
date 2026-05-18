@@ -6,4 +6,5 @@ using ConstrainedCobbDouglas
     include("test_sim.jl")
     include("test_allocator.jl")
     include("test_costs.jl")
+    include("test_tax.jl")
 end
