@@ -117,3 +117,57 @@ function compute_preference_weights(
     end
     return γ
 end
+
+# --- EWLS (vendored from Compute.jl lines 3108-3177). ---
+
+"""
+    ewls_init(α₀, β₀, σ_ε₀; half_life = 63.0, prior_weight = 63.0) -> MyEWLSState
+
+Initialize EWLS state from a prior (α₀, β₀, σ_ε₀). Decay η = 2^(-1/half_life);
+prior_weight seeds the sufficient statistics so EWLS recovers (α₀, β₀) exactly
+on day 0.
+"""
+function ewls_init(α₀::Float64, β₀::Float64, σ_ε₀::Float64;
+        half_life::Float64 = 63.0, prior_weight::Float64 = 63.0)::MyEWLSState
+    η = 2.0^(-1.0 / half_life)
+    s = MyEWLSState()
+    s.Sw   = prior_weight
+    s.Swx  = 0.0
+    s.Swy  = prior_weight * α₀
+    s.Swxx = prior_weight * 1.0
+    s.Swxy = prior_weight * β₀
+    s.Swyy = prior_weight * (α₀^2 + β₀^2 + σ_ε₀^2)
+    s.η = η
+    s.α = α₀; s.β = β₀; s.σ_ε = σ_ε₀
+    return s
+end
+
+"""
+    ewls_update!(state, g_i, g_m) -> (α, β, σ_ε)
+
+Decay running sums by η, add new (g_i, g_m) observation with unit weight,
+recompute (α, β, σ_ε). Returns the updated estimates.
+"""
+function ewls_update!(state::MyEWLSState, g_i::Float64,
+        g_m::Float64)::Tuple{Float64,Float64,Float64}
+    η = state.η
+    state.Sw   = η * state.Sw   + 1.0
+    state.Swx  = η * state.Swx  + g_m
+    state.Swy  = η * state.Swy  + g_i
+    state.Swxx = η * state.Swxx + g_m * g_m
+    state.Swxy = η * state.Swxy + g_i * g_m
+    state.Swyy = η * state.Swyy + g_i * g_i
+    denom = state.Sw * state.Swxx - state.Swx^2
+    if abs(denom) > 1e-12
+        state.β = (state.Sw * state.Swxy - state.Swx * state.Swy) / denom
+        state.α = (state.Swy - state.β * state.Swx) / state.Sw
+        mse = (state.Swyy
+               - 2.0 * state.β * state.Swxy
+               - 2.0 * state.α * state.Swy
+               + state.β^2 * state.Swxx
+               + 2.0 * state.α * state.β * state.Swx
+               + state.α^2 * state.Sw) / state.Sw
+        state.σ_ε = sqrt(max(mse, 0.0))
+    end
+    return (state.α, state.β, state.σ_ε)
+end

@@ -65,4 +65,31 @@ using ConstrainedCobbDouglas
         @test length(γ) == 2
         @test all(-1.0 .<= γ .<= 1.0)
     end
+
+    @testset "ewls_init recovers prior estimates" begin
+        s = ewls_init(0.05, 1.2, 0.18; half_life = 252.0, prior_weight = 252.0)
+        @test isapprox(s.α, 0.05; atol = 1e-12)
+        @test isapprox(s.β, 1.2; atol = 1e-12)
+        @test isapprox(s.σ_ε, 0.18; atol = 1e-6)
+        @test s.η > 0.99 && s.η < 1.0
+    end
+
+    @testset "ewls_update! tracks a step change after enough data" begin
+        rng = MersenneTwister(123)
+        s = ewls_init(0.0, 1.0, 0.2; half_life = 21.0, prior_weight = 21.0)
+        α_new, β_new, σ_new = 0.10, 1.5, 0.20
+        for _ in 1:500
+            g_m = 0.15 * randn(rng)
+            g_i = α_new + β_new * g_m + σ_new * randn(rng)
+            ewls_update!(s, g_i, g_m)
+        end
+        @test isapprox(s.β, β_new; atol = 0.25)  # analytic SE ~0.24 at N=500, σ_ε=0.2, σ_m=0.15
+        @test isapprox(s.α, α_new; atol = 0.10)
+    end
+
+    @testset "ewls_update! decay factor" begin
+        s = ewls_init(0.0, 1.0, 0.1; half_life = 252.0, prior_weight = 252.0)
+        expected_η = 2.0^(-1.0 / 252.0)
+        @test isapprox(s.η, expected_η; atol = 1e-12)
+    end
 end

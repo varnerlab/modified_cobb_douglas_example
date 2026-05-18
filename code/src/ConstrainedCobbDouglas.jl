@@ -35,6 +35,7 @@ export MyBanditConfig, MyBanditResult
 export MyBacktestState, MyBacktestResult
 export estimate_sim, build_sim_covariance
 export compute_market_growth, compute_ema, compute_lambda, compute_preference_weights
+export ewls_init, ewls_update!
 
 include("SIM.jl")
 # include("Allocator.jl")
