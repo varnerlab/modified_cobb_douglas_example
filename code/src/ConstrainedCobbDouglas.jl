@@ -22,6 +22,18 @@ const hmm_simulate = JumpHMM.simulate
 
 # Module includes (populated in later tasks)
 include("Types.jl")
+
+export MySIMParameterEstimate, MyEWLSState
+export MyConstrainedCDProblem, MyConstrainedCDResult
+export MyMPCSpec, MyMPCProjection, MyMPCTrigger
+export MyCostModel
+export MyTaxLot, MyTaxLedger
+export MyAllocationStrategy, EqualWeightStrategy, MinVarBuyHoldStrategy,
+       UnconstrainedCDStrategy, CostAwareMVStrategy,
+       CDWithMPCStrategy, ConstrainedCDWithMPCStrategy
+export MyBanditConfig, MyBanditResult
+export MyBacktestState, MyBacktestResult
+
 # include("SIM.jl")
 # include("Allocator.jl")
 # include("MPC.jl")
