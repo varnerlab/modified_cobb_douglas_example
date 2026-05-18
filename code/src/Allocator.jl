@@ -128,8 +128,15 @@ function solve_constrained_cd(problem::MyConstrainedCDProblem;
         end
 
         # Covariance budget via SOC: ||Lᵀ w|| ≤ σ_max
+        # Force AffExpr typing: when only a subset is "preferred", some rows of
+        # Lt*w_full collapse to pure constants (no decision-variable terms),
+        # producing a Vector{Any} that JuMP's SecondOrderCone builder rejects.
         Lt = Matrix(L')
-        @constraint(m, [σ_max; Lt * collect(w_full)] in SecondOrderCone())
+        Ltw = AffExpr[AffExpr(0.0) for _ in 1:K]
+        for r in 1:K, c in 1:K
+            add_to_expression!(Ltw[r], Lt[r, c], w_full[c])
+        end
+        @constraint(m, vcat(σ_max, Ltw) in SecondOrderCone())
 
         # Turnover budget (l1) — slack vars on preferred only; non-preferred churn ignored
         # since their position changes ε → ε (zero) under the same regime.
