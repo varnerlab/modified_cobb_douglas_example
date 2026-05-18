@@ -9,4 +9,5 @@ using ConstrainedCobbDouglas
     include("test_tax.jl")
     include("test_mpc.jl")
     include("test_bandit.jl")
+    include("test_files.jl")
 end
