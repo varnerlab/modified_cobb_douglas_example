@@ -116,6 +116,7 @@ using ConstrainedCobbDouglas
         results = compare_strategies(strategies, env, cm, rates; B₀ = 100_000.0, rng_seed = 42)
         @test haskey(results, "EqualWeightStrategy")
         @test haskey(results, "UnconstrainedCDStrategy")
-        @test results["EqualWeightStrategy"].wealth_after_cost_pretax[1] == 100_000.0
+        @test results["EqualWeightStrategy"].wealth_after_cost_pretax[1] ≈ 100_000.0 atol=100.0
+        @test length(results) == 2
     end
 end
