@@ -87,6 +87,8 @@ end
     compute_lambda(short_ema, long_ema; θ = 0.5) -> Vector{Float64}
 
 Regime-lens λ from EMA crossover. λ_t = 1 / (1 + exp(-(short-long)/θ)) (sigmoid).
+The returned vector is a time series of λ values aligned with the input EMA
+series (one λ per timestep); callers index it at the decision time of interest.
 """
 function compute_lambda(short_ema::Vector{Float64}, long_ema::Vector{Float64};
         θ::Float64 = 0.5)::Vector{Float64}
@@ -108,6 +110,7 @@ function compute_preference_weights(
     γ = zeros(K)
     for i in 1:K
         (αᵢ, βᵢ, _) = sim_parameters[tickers[i]]
+        # 1e-8 floor guards against division by ~0 when βᵢ ≈ 0 (zero-beta names).
         RF = max(abs(βᵢ)^lambda, 1e-8)
         g_hat = αᵢ / RF + (abs(βᵢ)^(1.0 - lambda)) * gm_t
         γ[i] = tanh(g_hat)
