@@ -86,7 +86,6 @@ function solve_constrained_cd(problem::MyConstrainedCDProblem;
             n = n_full,
             w = (n_full .* p) ./ B,
             unallocated_budget = B - sum(n_full .* p),
-            duals = (σ_max = 0.0, turnover = 0.0, w_max = 0.0),
             status = :no_preferred,
             objective = 0.0)
     end
@@ -175,7 +174,6 @@ function solve_constrained_cd(problem::MyConstrainedCDProblem;
             n = copy(n_prev),
             w = (n_prev .* p) ./ B,
             unallocated_budget = max(0.0, B - sum(n_prev .* p)),
-            duals = (σ_max = 0.0, turnover = 0.0, w_max = 0.0),
             status = :solver_failed,
             objective = 0.0)
     end
@@ -190,7 +188,6 @@ function solve_constrained_cd(problem::MyConstrainedCDProblem;
         n = n_full,
         w = w_full,
         unallocated_budget = max(0.0, B - sum(n_full .* p)),
-        duals = (σ_max = 0.0, turnover = 0.0, w_max = 0.0),  # filled in Task 10
         status = :optimal,
         objective = obj)
 end

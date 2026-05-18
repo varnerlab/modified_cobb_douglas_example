@@ -157,10 +157,11 @@ struct MyConstrainedCDResult
     n::Vector{Float64}            # optimal continuous shares (no rounding)
     w::Vector{Float64}            # optimal weights
     unallocated_budget::Float64   # nonzero only when no asset has γ > 0
-    duals::NamedTuple             # dual values on σ_max, turnover, w_max constraints (when binding)
-    status::Symbol                # :optimal, :no_preferred, :infeasible, :solver_failed
+    status::Symbol                # :optimal, :no_preferred, :solver_failed
     objective::Float64            # achieved Cobb-Douglas log-utility
 end
+# Note: a `duals` NamedTuple was specified in earlier drafts but removed in
+# v1 — it was never populated or read by the harness.
 ```
 
 **No share rounding in the solver.** Clarabel returns continuous shares. The integer-rounding step lives in `Backtest.jl` as `materialize_orders(n_target, n_current, prices, B_available, cost_model) → (orders::Vector{NamedTuple}, cash_delta::Float64)`, which (a) enforces minimum order size to defuse γ-jitter (live engine failure mode, source spec §1.3), and (b) the turnover budget constraint already bounds total l1 churn at the solver level, so the rounding step rarely faces large discrepancies. Both defenses, not either-or.
@@ -259,6 +260,8 @@ s.t.    Σ_{i ∈ S⁺} nᵢ pᵢ                 ≤ B - ε · Σ_{i ∈ S⁻} 
 with    wᵢ = nᵢ pᵢ / B   (and wᵢ = ε·pᵢ/B for i ∈ S⁻ pinned)
 ```
 
+**Units of `σ_max`.** The codebase operates in the growth-rate convention throughout: `compute_market_growth` divides log-returns by `Δt = 1/252` so `(α, β, σ_ε)` and the SIM-implied `Σ` are all in *annualized-growth-rate* units. The covariance constraint `wᵀ Σ w ≤ σ_max²` therefore caps the portfolio growth-rate variance, and `σ_max` is in **growth-rate-vol units** — not return-vol units. The conversion is `σ_return ≈ σ_growth · √Δt = σ_growth / √252`. As reference points under the calibrated Σ: SPY itself has `σ_m ≈ 2.74`, the equal-weight basket has σ ≈ 2.99, and CD-tilted weights run σ ≈ 4.0. A growth-rate cap of `σ_max ≈ 2.54` (≈ 0.85·EW_σ) corresponds to a return-vol cap of roughly `2.54/√252 ≈ 16%` annualized; backtest script 05 uses this value so the covariance constraint binds on most strategy days.
+
 ### 4.2 The JuMP conic formulation
 
 Three cone types do the heavy lifting:
@@ -279,10 +282,9 @@ Solver: `Clarabel.Optimizer` default; `SCS.Optimizer` fallback. The allocator re
 |---|---|---|
 | `:optimal` | Solver converged | Use `n`, proceed to `materialize_orders` |
 | `:no_preferred` | `S⁺ = ∅`; full budget falls out as `unallocated_budget` | Hold cash, skip allocation |
-| `:infeasible` | Constraints can't be jointly satisfied | Loosen `K_turnover` 2× and retry once; if still infeasible, fall back to `n_prev` and log |
-| `:solver_failed` | Both Clarabel and SCS returned non-optimal | Same fallback |
+| `:solver_failed` | Clarabel returned non-optimal; SCS fallback also non-optimal | Fall back to `n_prev` and log |
 
-`duals` exposes which constraint is binding — backtest postmortems can read these to see *why* an allocation landed where it did.
+(Removed in v1: a `duals` NamedTuple on `MyConstrainedCDResult` exposing which constraint is binding. It was never populated or read by the harness, so it was dropped.)
 
 ### 4.4 Unit-test contract
 

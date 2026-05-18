@@ -30,7 +30,6 @@ using ConstrainedCobbDouglas
         r = MyConstrainedCDResult(
             n = [50.0, 100.0], w = [0.5, 0.5],
             unallocated_budget = 0.0,
-            duals = (σ_max = 0.0, turnover = 0.0, w_max = 0.0),
             status = :optimal,
             objective = 1.234)
         @test r.status == :optimal

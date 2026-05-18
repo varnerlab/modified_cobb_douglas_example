@@ -29,15 +29,20 @@ function forward_project_closed_form(α::Vector{Float64}, β::Vector{Float64},
 end
 
 """
-    forward_project(state, spec, env) -> MyMPCProjection
+    forward_project(state, spec, env; rng = Random.default_rng()) -> MyMPCProjection
 
 JumpHMM-SIM hybrid forward projection (spec §5.1) plus closed-form arms.
 
 `env` is a NamedTuple carrying `market_model::JumpHiddenMarkovModel`,
 plus per-ticker `α`, `β`, `σ_ε` vectors (in the same order as `state.positions`),
 plus `σ_m::Float64`, plus `tickers::Vector{String}`. The `Δt` is fixed at 1/252.
+
+`rng` is threaded through the per-asset idiosyncratic noise draws so that
+parallel callers (e.g. `compare_strategies(...; parallel = true)`) do not
+contend on the global RNG. `hmm_simulate` still uses Julia's default RNG.
 """
-function forward_project(state, spec::MyMPCSpec, env)::MyMPCProjection
+function forward_project(state, spec::MyMPCSpec, env;
+        rng::AbstractRNG = Random.default_rng())::MyMPCProjection
     Δt = 1.0 / 252.0
     T = spec.T; N = spec.N
     n = state.positions
@@ -59,7 +64,7 @@ function forward_project(state, spec::MyMPCSpec, env)::MyMPCProjection
         P = copy(prices0)
         for τ in 1:T
             for i in 1:K
-                g_i = α[i] + β[i] * G_market[τ] + σ_ε[i] * randn()
+                g_i = α[i] + β[i] * G_market[τ] + σ_ε[i] * randn(rng)
                 P[i] = P[i] * exp(g_i * Δt)
             end
             paths[j, τ] = sum(n .* P) + state.cash

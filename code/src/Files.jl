@@ -40,6 +40,9 @@ function load_ohlc_jld2(path::String)::NamedTuple
         end
         sort!(tickers)
         K = length(tickers)
+        n_total = length(ds)
+        n_dropped = n_total - K
+        println("load_ohlc_jld2: kept $K of $n_total tickers (dropped $n_dropped with mismatched timestamps)")
         prices  = Matrix{Float64}(undef, T_ref, K)
         volumes = Matrix{Float64}(undef, T_ref, K)
         for (j, tk) in enumerate(tickers)

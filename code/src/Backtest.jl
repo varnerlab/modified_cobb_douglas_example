@@ -104,6 +104,9 @@ function run_backtest(strategy::MyAllocationStrategy, env, cost_model::MyCostMod
         tax_rates::NamedTuple; B₀::Float64 = 100_000.0,
         rng_seed::Int = 42)::MyBacktestResult
     Random.seed!(rng_seed)
+    # Per-strategy RNG threaded through forward_project so MC paths are
+    # reproducible per seed and parallel callers don't contend on globalRNG.
+    bt_rng = MersenneTwister(rng_seed)
     tickers = env.tickers
     K = length(tickers); n_days = size(env.prices, 1)
     Δt = 1.0 / 252.0
@@ -204,7 +207,7 @@ function run_backtest(strategy::MyAllocationStrategy, env, cost_model::MyCostMod
             if is_mpc(strategy)
                 env_proj = merge(env_step, (market_model = env.market_model,))
                 state.last_projection = forward_project(state,
-                    strategy.spec, env_proj)
+                    strategy.spec, env_proj; rng = bt_rng)
                 state.last_decision_t = t
             end
         end

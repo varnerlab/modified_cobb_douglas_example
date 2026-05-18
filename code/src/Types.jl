@@ -59,7 +59,6 @@ Base.@kwdef struct MyConstrainedCDResult
     n::Vector{Float64}
     w::Vector{Float64}
     unallocated_budget::Float64
-    duals::NamedTuple
     status::Symbol
     objective::Float64
 end

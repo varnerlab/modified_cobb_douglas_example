@@ -92,6 +92,9 @@ tax_rates = (st = 0.37, lt = 0.20)
 
 # The six strategies
 spec = MyMPCSpec(z = 1.96, T = 21, N = 1000, D_max = 0.08)
+# σ_max is in growth-rate-vol units (annualized). EW basket σ ≈ 2.99 in
+# these units (σ_m ≈ 2.74), so σ_max ≈ 0.85·EW_σ ≈ 2.54 keeps the
+# covariance cap binding on most strategy days without trivial infeasibility.
 strategies = MyAllocationStrategy[
     EqualWeightStrategy(),
     MinVarBuyHoldStrategy(),
@@ -99,7 +102,7 @@ strategies = MyAllocationStrategy[
     CostAwareMVStrategy(κ = 5.0, c = 0.0005),
     CDWithMPCStrategy(spec = spec),
     ConstrainedCDWithMPCStrategy(spec = spec,
-        σ_max = 0.12, K_turnover = 0.10 * B_0, w_max = 0.20)]
+        σ_max = 2.54, K_turnover = 0.10 * B_0, w_max = 0.20)]
 
 println("\nRunning $(length(strategies)) strategies:")
 results = compare_strategies(strategies, env, cost_model, tax_rates;
