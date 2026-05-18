@@ -33,8 +33,9 @@ export MyAllocationStrategy, EqualWeightStrategy, MinVarBuyHoldStrategy,
        CDWithMPCStrategy, ConstrainedCDWithMPCStrategy
 export MyBanditConfig, MyBanditResult
 export MyBacktestState, MyBacktestResult
+export estimate_sim, build_sim_covariance
 
-# include("SIM.jl")
+include("SIM.jl")
 # include("Allocator.jl")
 # include("MPC.jl")
 # include("Costs.jl")
