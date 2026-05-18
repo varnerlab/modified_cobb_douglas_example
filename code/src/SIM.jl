@@ -7,7 +7,7 @@
 Fit α, β, σ_ε via regularized OLS on annualized growth rates.
 Inputs and outputs are annualized (1/year units).
 """
-function estimate_sim(market_returns::Array{Float64,1}, asset_returns::Array{Float64,1},
+function estimate_sim(market_returns::Vector{Float64}, asset_returns::Vector{Float64},
         ticker::String; δ::Float64 = 0.0)::MySIMParameterEstimate
     T = length(market_returns)
     X = hcat(ones(T), market_returns)
@@ -34,8 +34,8 @@ end
 SIM-implied covariance of annualized growth rates:
 Σ_ii = β_i² σ_m² + σ_ε_i² ; Σ_ij = β_i β_j σ_m².
 """
-function build_sim_covariance(sim_estimates::Array{MySIMParameterEstimate,1},
-        σ_m::Float64)::Array{Float64,2}
+function build_sim_covariance(sim_estimates::Vector{MySIMParameterEstimate},
+        σ_m::Float64)::Matrix{Float64}
     N = length(sim_estimates)
     Σ = zeros(N, N)
     σ_m² = σ_m^2
