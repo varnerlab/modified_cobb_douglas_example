@@ -62,6 +62,45 @@ using ConstrainedCobbDouglas
         end
     end
 
+    @testset "solve_constrained_cd: budget deployment with c̄ > 0 and loose K_turnover" begin
+        # Regression: previously the L1 turnover slacks (unbounded above,
+        # absent from the objective) created degenerate directions in the
+        # conic program and Clarabel terminated at a suboptimum that left
+        # ~55% of the budget unspent, even when the turnover constraint
+        # was provably slack. The fix detects that c̄ · max ‖n − n_prev‖_1
+        # ≤ K_turnover and omits the slack encoding in that case.
+        γ = [0.5, 0.3, 0.2, -0.1]
+        p = [100.0, 50.0, 25.0, 200.0]
+        B = 10_000.0
+        Σ = Matrix{Float64}(I, 4, 4) * 0.04
+        # Realistic setup: non-zero c̄, loose K_turnover, EW starting position.
+        n_prev = [B / (4 * pp) for pp in p]
+        problem = MyConstrainedCDProblem(
+            γ = γ, p = p, B = B, Σ = Σ,
+            σ_max = 1.0e6, K_turnover = 1.0e12, w_max = 1.0,
+            n_prev = n_prev, c̄ = 0.05)
+        res = solve_constrained_cd(problem)
+        n_an, _ = solve_unconstrained_cd_analytical(γ, p, B; ε = 1e-3)
+
+        @test res.status == :optimal
+        # Budget deployment: the closed form spends 100% of B; the solver
+        # must do the same to within numerical slack.
+        spent_solver = sum(res.n .* p)
+        @test spent_solver ≥ 0.999 * B
+        @test spent_solver ≤ B + 1e-3
+
+        # Share-vector identity on preferred subset (not just ratios).
+        pref = findall(γ .> 0)
+        for i in pref
+            @test isapprox(res.n[i], n_an[i]; rtol = 1e-3)
+        end
+        # Non-preferred is pinned at ε = 1e-3 in both implementations.
+        nonpref = findall(γ .<= 0)
+        for i in nonpref
+            @test isapprox(res.n[i], 1e-3; atol = 1e-5)
+        end
+    end
+
     @testset "solve_constrained_cd: σ_max monotonicity" begin
         γ = [0.5, 0.3, 0.2]
         p = [100.0, 50.0, 25.0]

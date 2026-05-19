@@ -98,12 +98,15 @@ end
 """
     MyMPCTrigger
 
-Outcome of a single `check_trigger` call.
+Outcome of a single `check_trigger` call. `τ` is days-since-the-last-decision
+(local clock used by the band check); `t_global` is the absolute day index in
+the hold-out window (needed to locate the event on a wealth curve).
 """
 Base.@kwdef struct MyMPCTrigger
     fired::Bool
     reason::Symbol   # :band_exit, :horizon_elapsed, :drawdown, :in_spec
     τ::Int
+    t_global::Int
 end
 
 # --- Cost model ---

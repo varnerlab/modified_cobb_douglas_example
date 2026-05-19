@@ -1,5 +1,14 @@
 # SIM API
 
+## Types
+
+```@docs
+MySIMParameterEstimate
+MyEWLSState
+```
+
+## Functions
+
 ```@docs
 estimate_sim
 build_sim_covariance

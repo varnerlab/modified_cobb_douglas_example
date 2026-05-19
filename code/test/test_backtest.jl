@@ -119,4 +119,28 @@ using ConstrainedCobbDouglas
         @test results["EqualWeightStrategy"].wealth_after_cost_pretax[1] ≈ 100_000.0 atol=100.0
         @test length(results) == 2
     end
+
+    @testset "ConstrainedCDWithMPC :no_preferred fallback goes to cash (matches CDWithMPC)" begin
+        # Regression: previously, :no_preferred returned state.positions (hold),
+        # while CDWithMPCStrategy's closed form returned ε shares (sell to cash).
+        # The two strategies should react identically to an all-γ-non-positive
+        # regime signal. After the unification, both pin every name at ε.
+        using ConstrainedCobbDouglas: ConstrainedCDWithMPCStrategy, MyMPCSpec,
+            MyBacktestState, allocate
+        K = 4
+        state = MyBacktestState()
+        state.V_t = 10_000.0
+        state.prices = [100.0, 50.0, 25.0, 200.0]
+        state.positions = [10.0, 20.0, 30.0, 5.0]   # nontrivial held position
+        γ_all_neg = [-0.1, -0.2, -0.05, -0.5]       # regime says "no name attractive"
+        Σ = Matrix{Float64}(I, K, K) * 0.04
+        env = (γ_t = γ_all_neg, Σ_t = Σ, c̄ = 0.05)
+        strat = ConstrainedCDWithMPCStrategy(
+            spec = MyMPCSpec(z = 1.96, T = 21, N = 100, D_max = 0.08),
+            σ_max = 1.0e6, K_turnover = 1.0e12, w_max = 1.0)
+        n_target = allocate(strat, state, 1, env)
+        # Every name pinned at ε = 1e-3 (go-to-cash), NOT the held positions.
+        @test all(isapprox.(n_target, 1e-3; atol = 1e-5))
+        @test !isapprox(n_target, state.positions; atol = 1e-3)
+    end
 end

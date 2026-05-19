@@ -102,24 +102,30 @@ Three conditions (any one fires):
 """
 function check_trigger(state, spec::MyMPCSpec)::MyMPCTrigger
     proj = state.last_projection
+    t_global = state.date_idx
     τ = state.date_idx - state.last_decision_t
     if proj === nothing || τ <= 0
-        return MyMPCTrigger(fired = false, reason = :in_spec, τ = max(τ, 0))
+        return MyMPCTrigger(fired = false, reason = :in_spec,
+                            τ = max(τ, 0), t_global = t_global)
     end
     # Drawdown first — circuit breaker
     if state.wealth_peak > 0.0
         dd = (state.wealth_peak - state.V_t) / state.wealth_peak
         if dd > spec.D_max
-            return MyMPCTrigger(fired = true, reason = :drawdown, τ = τ)
+            return MyMPCTrigger(fired = true, reason = :drawdown,
+                                τ = τ, t_global = t_global)
         end
     end
     if τ >= spec.T
-        return MyMPCTrigger(fired = true, reason = :horizon_elapsed, τ = τ)
+        return MyMPCTrigger(fired = true, reason = :horizon_elapsed,
+                            τ = τ, t_global = t_global)
     end
     τ_clamped = min(τ, length(proj.μ))
     μτ = proj.μ[τ_clamped]; στ = proj.σ[τ_clamped]
     if state.V_t < μτ - spec.z * στ || state.V_t > μτ + spec.z * στ
-        return MyMPCTrigger(fired = true, reason = :band_exit, τ = τ)
+        return MyMPCTrigger(fired = true, reason = :band_exit,
+                            τ = τ, t_global = t_global)
     end
-    return MyMPCTrigger(fired = false, reason = :in_spec, τ = τ)
+    return MyMPCTrigger(fired = false, reason = :in_spec,
+                        τ = τ, t_global = t_global)
 end

@@ -47,8 +47,9 @@ using ConstrainedCobbDouglas
             divergence_warning = false)
         @test length(proj.μ) == 21
 
-        trig = MyMPCTrigger(fired = false, reason = :in_spec, τ = 5)
+        trig = MyMPCTrigger(fired = false, reason = :in_spec, τ = 5, t_global = 42)
         @test trig.reason == :in_spec
+        @test trig.t_global == 42
     end
 
     @testset "MyCostModel" begin

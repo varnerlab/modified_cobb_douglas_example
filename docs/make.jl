@@ -18,7 +18,8 @@ makedocs(
             "Costs"      => "api/costs.md",
             "Tax"        => "api/tax.md",
             "Bandit"     => "api/bandit.md",
-            "Backtest"   => "api/backtest.md"],
+            "Backtest"   => "api/backtest.md",
+            "Files"      => "api/files.md"],
         "Usage" => [
             "Pipeline" => "usage/pipeline.md",
             "Notebook" => "usage/notebook.md"]],

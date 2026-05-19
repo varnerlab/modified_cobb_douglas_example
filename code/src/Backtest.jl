@@ -31,6 +31,17 @@ end
 
 # --- Strategy dispatch ---
 
+"""
+    should_decide(strategy, state, t) -> Bool
+
+Return `true` when `strategy` should fire its allocator at hold-out day `t`.
+Cadence is strategy-specific:
+
+- `EqualWeightStrategy`, `MinVarBuyHoldStrategy` — only at `t == 1` (buy-and-hold).
+- `UnconstrainedCDStrategy`, `CostAwareMVStrategy` — every day (daily rebalance).
+- `CDWithMPCStrategy`, `ConstrainedCDWithMPCStrategy` — at `t == 1` and whenever
+  the MPC trigger has armed `state.next_decision_due`.
+"""
 should_decide(::EqualWeightStrategy, state::MyBacktestState, t::Int)::Bool = (t == 1)
 should_decide(::MinVarBuyHoldStrategy, state::MyBacktestState, t::Int)::Bool = (t == 1)
 should_decide(::UnconstrainedCDStrategy, state::MyBacktestState, t::Int)::Bool = true
@@ -87,7 +98,11 @@ function allocate(s::ConstrainedCDWithMPCStrategy, state::MyBacktestState, t::In
         σ_max = s.σ_max, K_turnover = s.K_turnover, w_max = s.w_max,
         n_prev = state.positions, c̄ = env.c̄)
     res = solve_constrained_cd(problem)
-    if res.status == :no_preferred || res.status == :solver_failed
+    # :no_preferred is a regime signal (every γ_i ≤ 0): use the ε-pinned
+    # vector that solve_constrained_cd produced, which sells out to cash and
+    # matches CDWithMPCStrategy's closed-form behavior on the same input.
+    # :solver_failed is a numerical failure (not a regime signal), so hold.
+    if res.status == :solver_failed
         return copy(state.positions)
     end
     return res.n

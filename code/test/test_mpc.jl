@@ -40,6 +40,7 @@ using ConstrainedCobbDouglas
         trig = check_trigger(state, spec)
         @test trig.fired == true
         @test trig.reason == :band_exit
+        @test trig.t_global == 3
     end
 
     @testset "check_trigger: horizon elapsed" begin
@@ -58,6 +59,7 @@ using ConstrainedCobbDouglas
         trig = check_trigger(state, spec)
         @test trig.fired == true
         @test trig.reason == :horizon_elapsed
+        @test trig.t_global == 22
     end
 
     @testset "check_trigger: drawdown circuit breaker" begin
@@ -76,6 +78,7 @@ using ConstrainedCobbDouglas
         trig = check_trigger(state, spec)
         @test trig.fired == true
         @test trig.reason == :drawdown
+        @test trig.t_global == 2
     end
 
     @testset "check_trigger: in-spec idle" begin
@@ -94,5 +97,6 @@ using ConstrainedCobbDouglas
         trig = check_trigger(state, spec)
         @test trig.fired == false
         @test trig.reason == :in_spec
+        @test trig.t_global == 3
     end
 end

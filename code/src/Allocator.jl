@@ -139,15 +139,27 @@ function solve_constrained_cd(problem::MyConstrainedCDProblem;
 
         # Turnover budget (l1) — slack vars on preferred only; non-preferred churn ignored
         # since their position changes ε → ε (zero) under the same regime.
-        # Skip slacks entirely when c̄ = 0 (turnover unpriced; constraint is vacuous and
-        # the redundant 0 ≤ K rows cause Clarabel scaling pathologies).
+        #
+        # Skip the slack encoding entirely when the constraint is provably slack:
+        #   - c̄ = 0 (turnover unpriced; constraint vacuous), OR
+        #   - c̄ · max ‖n − n_prev‖_1 ≤ K_turnover (no feasible point can violate it).
+        # The slack vars u_k are unbounded above and do not appear in the objective.
+        # When the constraint can't bind they form degenerate directions that push
+        # Clarabel to a suboptimum (verified: pre-fix the solver left ~55% of the
+        # budget unspent on the realistic 06 setup with c̄=0.05 and K_turnover=$10k).
         if c̄ > 0
-            @variable(m, u[1:Kp] >= 0)
-            for k in 1:Kp
-                @constraint(m, u[k] >= n[k] - n_prev_p[k])
-                @constraint(m, u[k] >= n_prev_p[k] - n[k])
+            # Upper bound on ‖n − n_prev‖_1 over the feasible set:
+            #   sum_k |n_k − n_prev_k| ≤ sum_k n_k + sum_k n_prev_k
+            #   sum_k n_k ≤ B_eff / min_k p_p[k]  (worst case: all budget in cheapest name)
+            max_l1 = B_eff / minimum(p_p) + sum(n_prev_p)
+            if c̄ * max_l1 > K_turnover
+                @variable(m, u[1:Kp] >= 0)
+                for k in 1:Kp
+                    @constraint(m, u[k] >= n[k] - n_prev_p[k])
+                    @constraint(m, u[k] >= n_prev_p[k] - n[k])
+                end
+                @constraint(m, c̄ * sum(u) <= K_turnover)
             end
-            @constraint(m, c̄ * sum(u) <= K_turnover)
         end
         return m, n, t
     end
