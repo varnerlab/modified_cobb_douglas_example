@@ -1,8 +1,19 @@
-# scripts/09_k_turnover_sweep.jl
+# scripts/10_cash_revisit_sweep.jl
 # Single-variable sensitivity sweep: ConstrainedCDWithMPCStrategy at each
-# K_turnover in a grid, 20-seed MC each. σ_max is pinned at 10.0 (cov inactive)
-# and w_max at 0.15 (the new best from the 08 sweep). Everything else mirrors
-# 06/07/08. Writes scripts/data/k_turnover_sweep.jld2.
+# cash_revisit_interval in a grid, 20-seed MC each. σ_max is pinned at 10.0
+# (cov inactive), w_max at 0.20 (bake-off default), and K_turnover at the
+# 0.10·B_0 = $10,000 baseline. Everything else mirrors 06/07/08/09.
+#
+# The cash_revisit_interval gates the new fourth trigger condition: while the
+# allocator is sitting in the ε-pin defensive regime (γ_i ≤ 0 across the
+# basket), the strategy re-evaluates after this many trading days instead of
+# waiting the full T-day horizon. Default = T = 21 preserves the original
+# behavior; smaller values let the strategy re-enter the market sooner after
+# a defensive fire. Canonical-seed smoke testing suggested interval = 5 is a
+# Sharpe sweet spot, but the response is highly non-monotonic, so a proper
+# 20-seed sweep is required before drawing conclusions.
+#
+# Writes scripts/data/cash_revisit_sweep.jld2.
 
 using Pkg
 Pkg.activate(joinpath(@__DIR__, "..", "code"))
@@ -18,13 +29,13 @@ const PATH_INPUTS = joinpath(@__DIR__, "..", "code", "src", "data")
 const PATH_OUT    = joinpath(@__DIR__, "data")
 const BACKTEST_MC_SEEDS = 2001:2020
 const B_0 = 100_000.0
-const SIGMA_MAX_FIXED = 10.0
-const W_MAX_FIXED     = 0.15
-const K_TURNOVER_MULTIPLIERS = [0.0001, 0.00025, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.10]
-const K_TURNOVER_GRID = K_TURNOVER_MULTIPLIERS .* B_0
+const SIGMA_MAX_FIXED  = 10.0
+const W_MAX_FIXED      = 0.20
+const K_TURNOVER_FIXED = 0.10 * B_0   # $10,000 per decision (bake-off default)
+const CASH_REVISIT_GRID = [1, 3, 5, 7, 10, 14, 21]
 
 println("=" ^ 78)
-println("09_k_turnover_sweep.jl — K_turnover sensitivity sweep, ConstrainedCDWithMPC")
+println("10_cash_revisit_sweep.jl — cash_revisit_interval sweep, ConstrainedCDWithMPC")
 println("=" ^ 78)
 
 # --- Mirror 06 environment setup ---------------------------------------------
@@ -51,9 +62,10 @@ dates_hold = vcat([Date(d) for d in ohlc_2025.dates],
                   [Date(d) for d in ohlc_2026.dates])
 n_days = size(prices_hold, 1)
 println("Hold-out: $n_days days, $(length(basket_tickers)) tickers, ",
-        length(K_TURNOVER_GRID), " K_turnover values, ",
+        length(CASH_REVISIT_GRID), " interval values, ",
         length(BACKTEST_MC_SEEDS), " seeds")
-println("Fixed: σ_max = $SIGMA_MAX_FIXED, w_max = $W_MAX_FIXED")
+println("Fixed: σ_max = $SIGMA_MAX_FIXED, w_max = $W_MAX_FIXED, ",
+        "K_turnover = \$$(Int(K_TURNOVER_FIXED))")
 
 spy_2025_idx = findfirst(==("SPY"), all_tickers_2025)
 spy_2026_idx = findfirst(==("SPY"), all_tickers_2026)
@@ -92,28 +104,29 @@ cost_model = MyCostModel(commission_per_trade = 0.0, half_spread_bps = 5.0,
                          slippage_κ = 0.001, adv = adv)
 tax_rates = (st = 0.37, lt = 0.20)
 
-spec = MyMPCSpec(z = 1.96, T = 21, N = 1000, D_max = 0.08)
-
 # --- Sweep -------------------------------------------------------------------
-n_seeds = length(BACKTEST_MC_SEEDS)
-n_kt    = length(K_TURNOVER_GRID)
-println("\nRunning ConstrainedCDWithMPC at $n_kt K_turnover × $n_seeds seeds = ",
-        n_kt * n_seeds, " backtests\n")
+n_seeds    = length(BACKTEST_MC_SEEDS)
+n_interval = length(CASH_REVISIT_GRID)
+println("\nRunning ConstrainedCDWithMPC at $n_interval intervals × $n_seeds seeds = ",
+        n_interval * n_seeds, " backtests\n")
 
-per_kt_results = Dict{Float64,Vector{MyBacktestResult}}()
-summary = Dict{Float64,Dict{String,Any}}()
+per_interval_results = Dict{Int,Vector{MyBacktestResult}}()
+summary              = Dict{Int,Dict{String,Any}}()
 
 t_start = time()
-for (j, kt) in enumerate(K_TURNOVER_GRID)
+for (j, interval) in enumerate(CASH_REVISIT_GRID)
+    # Build a fresh spec for each grid point — only cash_revisit_interval varies.
+    spec = MyMPCSpec(z = 1.96, T = 21, N = 1000, D_max = 0.08,
+                     cash_revisit_interval = interval)
     strat = ConstrainedCDWithMPCStrategy(spec = spec,
-        σ_max = SIGMA_MAX_FIXED, K_turnover = kt, w_max = W_MAX_FIXED)
+        σ_max = SIGMA_MAX_FIXED, K_turnover = K_TURNOVER_FIXED, w_max = W_MAX_FIXED)
 
     results = Vector{MyBacktestResult}(undef, n_seeds)
     for (i, s) in enumerate(BACKTEST_MC_SEEDS)
         results[i] = run_backtest(strat, env, cost_model, tax_rates;
                                   B₀ = B_0, rng_seed = s)
     end
-    per_kt_results[kt] = results
+    per_interval_results[interval] = results
 
     sharpe_mc       = Float64[r.summary.ann_sharpe       for r in results]
     max_dd_mc       = Float64[r.summary.max_drawdown     for r in results]
@@ -123,12 +136,14 @@ for (j, kt) in enumerate(K_TURNOVER_GRID)
     W_T_over_W0_mc  = Float64[r.wealth_after_cost_pretax[end] /
                               r.wealth_after_cost_pretax[1] for r in results]
 
-    reason_counts = Dict(:band_exit => 0, :horizon_elapsed => 0, :drawdown => 0)
+    # Initialize all four trigger reasons so missing entries print as 0.
+    reason_counts = Dict(:band_exit => 0, :horizon_elapsed => 0,
+                         :drawdown => 0, :cash_revisit => 0)
     for r in results, t in r.trigger_log
         t.fired || continue
         reason_counts[t.reason] = get(reason_counts, t.reason, 0) + 1
     end
-    summary[kt] = Dict{String,Any}(
+    summary[interval] = Dict{String,Any}(
         "sharpe_mc"               => sharpe_mc,
         "max_dd_mc"               => max_dd_mc,
         "ann_turnover_mc"         => ann_turnover_mc,
@@ -139,48 +154,49 @@ for (j, kt) in enumerate(K_TURNOVER_GRID)
         "trigger_reason_per_seed" => Dict(String(k) => v / n_seeds
                                           for (k, v) in reason_counts))
 
-    @printf("K_turn=\$%9.0f (%7.5f·B0, %d/%d):  Sharpe med=%.3f  IQR=[%.3f,%.3f]  MaxDD%% med=%.1f  trigs/seed med=%d\n",
-            kt, kt / B_0, j, n_kt,
+    @printf("interval=%2d days (%d/%d):  Sharpe med=%.3f  IQR=[%.3f,%.3f]  MaxDD%% med=%.1f  trigs/seed med=%d\n",
+            interval, j, n_interval,
             median(sharpe_mc), quantile(sharpe_mc, 0.25), quantile(sharpe_mc, 0.75),
             median(max_dd_mc) * 100, Int(round(median(n_trig_mc))))
 end
 t_elapsed = time() - t_start
-@printf("\nWall-clock: %.1f s (%.2f s per K_turnover × %d seeds)\n",
-        t_elapsed, t_elapsed / n_kt, n_seeds)
+@printf("\nWall-clock: %.1f s (%.2f s per interval × %d seeds)\n",
+        t_elapsed, t_elapsed / n_interval, n_seeds)
 
 # --- Summary table -----------------------------------------------------------
-println("\nK_turnover sweep summary (median across $n_seeds seeds):")
-println("-" ^ 110)
-@printf("%-12s  %-7s  %8s %8s %8s   %8s %8s %8s   %8s  %5s %5s %5s\n",
-        "K_turn (\$)", "x B0",
+println("\ncash_revisit_interval sweep summary (across $n_seeds seeds):")
+println("-" ^ 118)
+@printf("%-9s  %8s %8s %8s   %8s %8s %8s   %8s  %5s %5s %5s %5s\n",
+        "interval",
         "Shp_Q25", "Shp_med", "Shp_Q75",
         "DD_min%", "DD_med%", "DD_max%",
-        "Turn_med", "band", "dd", "horz")
-println("-" ^ 110)
-for kt in K_TURNOVER_GRID
-    s = summary[kt]
+        "Turn_med", "band", "dd", "horz", "cash")
+println("-" ^ 118)
+for interval in CASH_REVISIT_GRID
+    s = summary[interval]
     sh, dd, tn = s["sharpe_mc"], s["max_dd_mc"], s["ann_turnover_mc"]
     rps = s["trigger_reason_per_seed"]
-    @printf("%12.0f  %7.5f  %8.3f %8.3f %8.3f   %8.1f %8.1f %8.1f   %8.3f  %5.1f %5.1f %5.1f\n",
-            kt, kt / B_0,
+    @printf("%9d  %8.3f %8.3f %8.3f   %8.1f %8.1f %8.1f   %8.3f  %5.1f %5.1f %5.1f %5.1f\n",
+            interval,
             quantile(sh, 0.25), median(sh), quantile(sh, 0.75),
             minimum(dd) * 100, median(dd) * 100, maximum(dd) * 100,
             median(tn),
-            get(rps, "band_exit", 0.0),
-            get(rps, "drawdown", 0.0),
-            get(rps, "horizon_elapsed", 0.0))
+            get(rps, "band_exit",       0.0),
+            get(rps, "drawdown",        0.0),
+            get(rps, "horizon_elapsed", 0.0),
+            get(rps, "cash_revisit",    0.0))
 end
-println("-" ^ 110)
+println("-" ^ 118)
 
 # --- Persist -----------------------------------------------------------------
-save_results(joinpath(PATH_OUT, "k_turnover_sweep.jld2"), Dict(
+save_results(joinpath(PATH_OUT, "cash_revisit_sweep.jld2"), Dict(
     "config" => Dict(
         "BACKTEST_MC_SEEDS"     => collect(BACKTEST_MC_SEEDS),
         "n_seeds"               => n_seeds,
-        "k_turnover_grid"       => K_TURNOVER_GRID,
-        "k_turnover_multipliers"=> K_TURNOVER_MULTIPLIERS,
+        "cash_revisit_grid"     => CASH_REVISIT_GRID,
         "sigma_max_fixed"       => SIGMA_MAX_FIXED,
         "w_max_fixed"           => W_MAX_FIXED,
+        "k_turnover_fixed"      => K_TURNOVER_FIXED,
         "hold_out_start"        => string(dates_hold[1]),
         "hold_out_end"          => string(dates_hold[end]),
         "n_days"                => n_days,
@@ -189,9 +205,9 @@ save_results(joinpath(PATH_OUT, "k_turnover_sweep.jld2"), Dict(
         "B_0"                   => B_0,
         "tax_rates"             => Dict("st" => tax_rates.st, "lt" => tax_rates.lt),
         "ewls_half_life_days"   => 252,
-        "MPC_spec"              => Dict("z" => spec.z, "T" => spec.T,
-                                        "N" => spec.N, "D_max" => spec.D_max)),
-    "k_turnover_grid"   => K_TURNOVER_GRID,
-    "summary"           => summary,
-    "per_kt_results"    => per_kt_results))
-println("\nSaved scripts/data/k_turnover_sweep.jld2")
+        "MPC_spec_fixed"        => Dict("z" => 1.96, "T" => 21,
+                                        "N" => 1000, "D_max" => 0.08)),
+    "cash_revisit_grid"     => CASH_REVISIT_GRID,
+    "summary"               => summary,
+    "per_interval_results"  => per_interval_results))
+println("\nSaved scripts/data/cash_revisit_sweep.jld2")

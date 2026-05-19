@@ -69,13 +69,19 @@ end
     MyMPCSpec
 
 MPC trigger configuration. `z` = band z-score, `T` = horizon in trading days,
-`N` = number of MC paths, `D_max` = circuit-breaker drawdown.
+`N` = number of MC paths, `D_max` = circuit-breaker drawdown,
+`cash_revisit_interval` = minimum trading days between cash-regime
+re-evaluations (default `T`, which matches horizon-elapsed and effectively
+disables the cash-revisit fast-path; set to 1 for daily revisit, or to any
+intermediate value to control how aggressively the strategy re-enters the
+market after the ε-pin defensive branch fires).
 """
 Base.@kwdef struct MyMPCSpec
     z::Float64 = 1.96
     T::Int = 21
     N::Int = 1000
     D_max::Float64 = 0.08
+    cash_revisit_interval::Int = 21
 end
 
 """
@@ -104,7 +110,7 @@ the hold-out window (needed to locate the event on a wealth curve).
 """
 Base.@kwdef struct MyMPCTrigger
     fired::Bool
-    reason::Symbol   # :band_exit, :horizon_elapsed, :drawdown, :in_spec
+    reason::Symbol   # :band_exit, :horizon_elapsed, :drawdown, :cash_revisit, :in_spec
     τ::Int
     t_global::Int
 end
@@ -300,6 +306,7 @@ mutable struct MyBacktestState
     last_projection::Union{Nothing,MyMPCProjection}
     just_decided::Bool
     next_decision_due::Bool
+    last_alloc_was_cash::Bool  # true if the prior MPC fire ended in the ε-pin (defensive cash) regime
     trigger_log::Vector{MyMPCTrigger}
     trades::Vector{NamedTuple}
     ledger::MyTaxLedger

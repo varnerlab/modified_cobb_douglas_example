@@ -139,6 +139,7 @@ function run_backtest(strategy::MyAllocationStrategy, env, cost_model::MyCostMod
     state.last_projection = nothing
     state.just_decided = false
     state.next_decision_due = false
+    state.last_alloc_was_cash = false  # no prior allocation yet; gates the cash_revisit trigger
     state.trigger_log = MyMPCTrigger[]
     state.trades = NamedTuple[]
     state.ledger = MyTaxLedger()
@@ -196,6 +197,14 @@ function run_backtest(strategy::MyAllocationStrategy, env, cost_model::MyCostMod
 
         if should_decide(strategy, state, t)
             n_target = allocate(strategy, state, t, env_step)
+            # Detect the ε-pin defensive-cash result before placing orders.
+            # Every MPC allocator returns ε ≈ 10⁻³ shares per name when γ_i ≤ 0
+            # across the basket; any real allocation produces tens to hundreds
+            # of shares somewhere. The threshold of 1.0 share is unambiguous.
+            # This flag is read by check_trigger to fire :cash_revisit daily
+            # while the strategy sits in cash, instead of waiting T days for
+            # the next horizon-elapsed fire.
+            state.last_alloc_was_cash = is_mpc(strategy) && all(n_target .< 1.0)
             orders = materialize_orders(tickers, n_target, state.positions,
                 state.prices, state.cash, cost_model)
             for o in orders

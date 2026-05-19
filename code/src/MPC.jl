@@ -95,10 +95,21 @@ end
 """
     check_trigger(state, spec::MyMPCSpec) -> MyMPCTrigger
 
-Three conditions (any one fires):
-  1. V_t outside band [μ_τ ± z·σ_τ]
-  2. τ >= spec.T (horizon refresh)
-  3. drawdown > spec.D_max (circuit breaker)
+Four conditions (any one fires):
+  1. `state.last_alloc_was_cash` AND τ ≥ spec.cash_revisit_interval
+     (defensive cash regime — re-evaluate after the configured interval)
+  2. drawdown > spec.D_max (circuit breaker)
+  3. τ >= spec.T (horizon refresh)
+  4. V_t outside band [μ_τ ± z·σ_τ]
+
+When `cash_revisit_interval` is left at its default (= T = 21), the cash
+fast-path races horizon-elapsed and is observed as `:cash_revisit` in the
+trigger log instead of `:horizon_elapsed`; the cadence is the same. Setting
+`cash_revisit_interval` shorter than T lets the strategy re-evaluate the
+defensive ε-pin regime on a faster cadence than the held-position horizon.
+A smoke test on the canonical seed shows that interval = 1 (daily revisit)
+hurts Sharpe and worsens drawdown by re-entering deteriorating regimes; the
+parameter is a knob, not a free improvement.
 """
 function check_trigger(state, spec::MyMPCSpec)::MyMPCTrigger
     proj = state.last_projection
@@ -108,7 +119,15 @@ function check_trigger(state, spec::MyMPCSpec)::MyMPCTrigger
         return MyMPCTrigger(fired = false, reason = :in_spec,
                             τ = max(τ, 0), t_global = t_global)
     end
-    # Drawdown first — circuit breaker
+    # Cash-revisit fast-path: when the prior fire returned the ε-pin defensive
+    # regime, re-evaluate after `cash_revisit_interval` trading days rather
+    # than waiting for the full T-day horizon. Default interval = T preserves
+    # the original held-position cadence (fires race horizon-elapsed and win).
+    if state.last_alloc_was_cash && τ >= spec.cash_revisit_interval
+        return MyMPCTrigger(fired = true, reason = :cash_revisit,
+                            τ = τ, t_global = t_global)
+    end
+    # Drawdown — circuit breaker
     if state.wealth_peak > 0.0
         dd = (state.wealth_peak - state.V_t) / state.wealth_peak
         if dd > spec.D_max
