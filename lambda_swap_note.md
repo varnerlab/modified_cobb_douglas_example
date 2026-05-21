@@ -93,11 +93,11 @@ Rough mapping (typical SPY EMA gap of ±5%):
 | 20   | 1.0           | strong; |β|^λ varies meaningfully |
 | 100  | 5.0           | extreme; risk of overflow in $|β|^{1-λ}$ for high-β names |
 
-**Chosen value: G = 50.0 (2026-05-21).** Top of the practical range from the sweep below; strongest meaningful weight tilt before the open-item defensive-cap caveat fires at G ≳ 100. Wired into all call sites:
-- `code/src/Backtest.jl:181` — `compute_lambda(short, long; G = 50.0)`
-- `scripts/02_train_bandit.jl:41` — `compute_lambda(short_ema, long_ema; G = 50.0)`
-- `scripts/03_train_bandit_mc.jl:38` — `compute_lambda(short_ema, long_ema; G = 50.0)`
-- `constrained-CD-with-MPC-paper-trade-trial/code/src/decide.jl` — `const _LAMBDA_GAIN = 50.0` threaded through the sole `compute_lambda` call site.
+**Chosen value: G = 20.0 (2026-05-21, revised).** Initially G = 50 was wired in based on the G sweep alone, but the subsequent backtest re-run + β-bucket reanalysis (see sections below) revealed that G = 50 sat in the worst spot: strong enough to break the existing σ_max / w_max / K_turnover sweet-spots but not strong enough to deliver the bearish-side β-reversal (which requires G ≳ 100 plus the open-item defensive cap). G = 20 preserves clean bullish-side tilt (mean |Δγ| ≈ 0.02) without breaking the live engine's existing constraint calibration. Wired into all call sites:
+- `code/src/Backtest.jl:181` — `compute_lambda(short, long; G = 20.0)`
+- `scripts/02_train_bandit.jl:41` — `compute_lambda(short_ema, long_ema; G = 20.0)`
+- `scripts/03_train_bandit_mc.jl:38` — `compute_lambda(short_ema, long_ema; G = 20.0)`
+- `constrained-CD-with-MPC-paper-trade-trial/code/src/decide.jl` — `const _LAMBDA_GAIN = 20.0` threaded through the sole `compute_lambda` call site.
 
 Companion fix at the same time: `Backtest.jl:183` fallback (when the EMA window is shorter than 21 days) was `λ_t = 0.5` — the sigmoid form's neutral midpoint. Under the signed form, neutral is 0.0; the old constant would have introduced a fixed mild bearish lean independent of market state. Updated to `λ_t = 0.0`.
 

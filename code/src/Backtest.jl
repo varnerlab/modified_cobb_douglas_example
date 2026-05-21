@@ -178,7 +178,7 @@ function run_backtest(strategy::MyAllocationStrategy, env, cost_model::MyCostMod
         if length(ema_window) >= 21
             short = compute_ema(ema_window; window = 21)
             long  = compute_ema(ema_window; window = max(21, length(ema_window)))
-            λ_t = compute_lambda(short, long; G = 50.0)[end]
+            λ_t = compute_lambda(short, long; G = 20.0)[end]
         else
             # Signed form: 0.0 is neutral (was 0.5 under the prior sigmoid form).
             λ_t = 0.0

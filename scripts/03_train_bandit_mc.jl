@@ -35,7 +35,7 @@ market_prices = market_idx === nothing ? vec(mean(price_matrix; dims = 2)) : pri
 g_m = compute_market_growth(Vector{Float64}(market_prices))
 short_ema = compute_ema(Vector{Float64}(market_prices); window = 21)
 long_ema  = compute_ema(Vector{Float64}(market_prices); window = 63)
-λ_series  = compute_lambda(short_ema, long_ema; G = 50.0)
+λ_series  = compute_lambda(short_ema, long_ema; G = 20.0)
 gm_series = vcat([0.0], g_m)
 n_days = length(market_prices)
 sector_of, _ = load_sector_map(tickers, joinpath(PATH_INPUTS, "sp500-sectors.csv"))
