@@ -29,22 +29,44 @@ function estimate_sim(market_returns::Vector{Float64}, asset_returns::Vector{Flo
 end
 
 """
-    build_sim_covariance(sim_estimates, σ_m) -> Matrix{Float64}
+    build_sim_covariance(sim_estimates, σ_m; Δt = 1/252) -> Matrix{Float64}
 
-SIM-implied covariance of annualized growth rates:
-Σ_ii = β_i² σ_m² + σ_ε_i² ; Σ_ij = β_i β_j σ_m².
+SIM-implied covariance of TRUE annualized growth rates:
+Σ_ii = (β_i² σ_m² + σ_ε_i²) · Δt ; Σ_ij = β_i · β_j · σ_m² · Δt.
+
+**Units convention** (the load-bearing detail). `σ_m` and `σ_ε` here are the
+SDs of `compute_market_growth(prices; Δt)` output — i.e., per-day log-returns
+annualized by `/Δt`. Their variance is therefore `(1/Δt)² × var(per_step) =
+(1/Δt) × var_annualized`, so they exceed the *true* annualized SD by √(1/Δt)
+(= √252 at daily Δt). The `· Δt` factor inside this function converts the
+inflated variance back to true annualized variance, which is what every
+downstream consumer assumes:
+
+  - `forward_project_closed_form` computes σ² = dot(w, Σ * w) × τ × Δt; with
+    Σ in true annualized variance this gives the variance of V_τ over τ
+    trading days (Δt = 1/252 years per step), matching the MC arm.
+  - σ_max in the constrained-CD allocator is documented as an annualized
+    portfolio vol cap; with Σ in true annualized variance, √(w'Σw) ≤ σ_max
+    correctly bounds the annualized SD.
+
+Pre-2026-05-21 the function omitted the `Δt` factor, so Σ was inflated by
+1/Δt = 252; that made σ_max bind at √252× tighter than its nominal value
+(0.76% true annualized vs. the 12% documented) and made the closed-form
+arm of `forward_project` overstate horizon σ by √252×. See
+`lambda_swap_note.md` for the full audit.
 """
 function build_sim_covariance(sim_estimates::Vector{MySIMParameterEstimate},
-        σ_m::Float64)::Matrix{Float64}
+        σ_m::Float64; Δt::Float64 = 1.0/252.0)::Matrix{Float64}
     N = length(sim_estimates)
     Σ = zeros(N, N)
-    σ_m² = σ_m^2
+    σ_m² = σ_m^2 * Δt
     for i ∈ 1:N
         βᵢ = sim_estimates[i].β
         σ_εᵢ = sim_estimates[i].σ_ε
+        σ_εᵢ² = σ_εᵢ^2 * Δt
         for j ∈ 1:N
             βⱼ = sim_estimates[j].β
-            Σ[i, j] = (i == j) ? βᵢ^2 * σ_m² + σ_εᵢ^2 : βᵢ * βⱼ * σ_m²
+            Σ[i, j] = (i == j) ? βᵢ^2 * σ_m² + σ_εᵢ² : βᵢ * βⱼ * σ_m²
         end
     end
     return Σ

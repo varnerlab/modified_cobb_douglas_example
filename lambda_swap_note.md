@@ -295,3 +295,54 @@ Three things I was wrong about, captured here so we don't repeat them:
 - **Constraint re-tuning is the real lever.** σ_max ≥ 3, w_max = 0.15, K_turnover ≥ 100 — same recipe at both G values. If the live test allows a constraint update, that's where the offline-optimal Sharpe is.
 - **Full bearish reversal needs G ≳ 100** AND the defensive cap on the open-item γ-overflow edge case. That's a second-order project, not a quick swap.
 - **If signed λ is required for live correctness regardless of offline Sharpe** (the original reason this swap happened), pick G to match the live-engine intent; offline backtest cannot adjudicate between G = 20 and G = 50 by Sharpe alone.
+
+## Units Fix — Σ scale correction (2026-05-21)
+
+Investigating why the live engine deployed only ~5% of equity per fire surfaced a deeper bug that supersedes most of the backtest analysis above: `Σ` from `build_sim_covariance` was in the wrong variance units.
+
+### The bug
+
+`σ_m` (from JumpHMM) and `σ_ε` (from EWLS) were estimated against `compute_market_growth(prices)` output, which annualizes daily log-returns by `/Δt = ×252`. Their sample variance is therefore `(1/Δt)² × σ²_per_step = (1/Δt) × σ²_annualized` — i.e., inflated by `1/Δt = 252` relative to true annualized variance, with SD inflated by `√252 ≈ 15.87`.
+
+Empirical check on SPY:
+
+| Quantity | Stored | True annual | Ratio |
+|---|---|---|---|
+| `env.σ_m` | 2.741 | 0.148 | √252 |
+| `var(g = r/Δt)` / `var(r)` | 63504 | — | 252² (exactly) |
+
+`build_sim_covariance` consumed those values as if they were true annualized SDs, so `Σ` was uniformly inflated by `1/Δt = 252`. Two consequences:
+
+1. **`σ_max` constraint bound 252× tighter than documented.** `||L^T w|| ≤ σ_max` was comparing an SD in inflated units against the config value `σ_max = 0.12` documented as "annualized portfolio vol cap." Effective true cap: `0.12 / √252 ≈ 0.76%`. With the basket's full-allocation annualized σ ≈ 16.9%, the engine could only deploy `0.76 / 16.9 ≈ 4.5%` of equity per fire before saturating the cap.
+2. **`forward_project_closed_form` overstated σ by √252.** Its formula `σ² = dot(w,Σ·w) × τ × Δt` is correct when `Σ` is true annualized variance. With the inflated Σ, it returned `√252 ×` the right answer. The MC arm used `σ_m` and `σ_ε` directly inside `g_i × Δt` and was unaffected; this is why every decide logged `divergence = true` despite the MC projection itself being correct.
+
+### The fix
+
+`code/src/SIM.jl :: build_sim_covariance` — multiply both `σ_m²` and `σ_ε²` by `Δt` before forming `Σ`, converting inflated variance back to true annualized variance. Added a `Δt = 1/252` kwarg so the convention is explicit at the API boundary. Docstring documents the input units convention in full.
+
+`code/src/MPC.jl :: forward_project_closed_form` — same fix applied to the inline Σ construction inside the closed-form arm.
+
+`code/test/test_sim.jl` — updated the two `Σ[i,j] ≈ …` assertions to include the `Δt` factor.
+
+### Verification
+
+- Algo tests: 155/155 pass. Trial tests: 91/91 pass.
+- Realistic σ values now: `env.σ_m = 2.741` → effective `σ_m_annual ≈ 0.173`; full-basket portfolio σ_annual = **16.86%** (was 267%).
+- `σ_max = 0.12` now binds at **basket fraction ≈ 71%** (was ~5%).
+- `forward_project_closed_form` σ_end at yesterday's weights: **$219** (was $3482) vs. MC arm $227. `divergence = true` will resolve on the next fire.
+
+### Blast radius — backtests need re-running
+
+Every backtest result in this repo (the bake-off, the σ_max / w_max / K_turnover / cash_revisit sweeps, the G sweep, the β-bucket × regime table) was computed against the inflated Σ. They are all stale. Specifically:
+
+- The G sweep that picked G = 20 was run with the broken units. The "practical range" table, sweet-spot recommendations, and β-bucket reversal threshold (G ≳ 100) all need re-running.
+- The backtest re-run sections above (G = 50 ConstrainedCDWithMPC Sharpe −0.33 vs sigmoid baseline, etc.) were measured under the broken Σ — the sweet-spot constraint values (σ_max ≥ 3, w_max = 0.15, K_turnover ≥ 100) are not meaningful under the corrected units.
+
+The G = 20 currently wired into both engines (`Backtest.jl:181`, the two `train_bandit` scripts, and the trial's `decide.jl`) is the post-units-fix calibration to revisit. Operational deployment-size implication for the live trial: the next trigger that fires will deploy ~70% of equity in one allocation (vs ~5% under the broken Σ).
+
+### Live trial state at fix time (2026-05-21)
+
+- 29 positions live at Alpaca from yesterday's $5,450 allocation. They were sized against the broken σ_max so the portfolio is currently massively under-deployed relative to the true 12% vol target.
+- `state.last_alloc_was_cash = false` (yesterday allocated), so `cash_revisit` won't fire on the immediate next decide. The next non-no-op trigger is the `horizon_elapsed` boundary at τ_td ≥ 21 trading days, or an earlier `band_exit` / `drawdown`.
+- Cron not paused — today's 16:15 ET decide will log `[TRIGGER] in-spec; no ticket` (τ_td = 1, no triggers can fire); subsequent decides up through the horizon boundary should also no-op under typical conditions.
+- G sweep re-run against the corrected Σ is queued before any genuine trigger fires.

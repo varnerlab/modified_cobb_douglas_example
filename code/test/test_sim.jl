@@ -27,12 +27,16 @@ using ConstrainedCobbDouglas
             e.ticker = t; e.α = 0.05; e.β = β; e.σ_ε = σ_ε; e.r² = 0.5
             push!(ests, e)
         end
+        # σ_m and σ_ε here are in `SD of compute_market_growth output` units
+        # (i.e., daily log-return × 1/Δt scale); build_sim_covariance applies
+        # the Δt factor internally to return Σ in true annualized variance.
+        Δt = 1.0 / 252.0
         Σ = build_sim_covariance(ests, 0.15)
         @test size(Σ) == (3, 3)
         @test Σ ≈ Σ'                      # symmetric
         @test all(eigvals(Σ) .> -1e-10)   # PSD
-        @test Σ[1, 1] ≈ 1.0^2 * 0.15^2 + 0.2^2
-        @test Σ[1, 2] ≈ 1.0 * 0.8 * 0.15^2
+        @test Σ[1, 1] ≈ (1.0^2 * 0.15^2 + 0.2^2) * Δt
+        @test Σ[1, 2] ≈ 1.0 * 0.8 * 0.15^2 * Δt
     end
 
     @testset "compute_market_growth annualizes log-returns" begin

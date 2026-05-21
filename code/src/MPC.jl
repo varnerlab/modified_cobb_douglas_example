@@ -10,10 +10,17 @@ function forward_project_closed_form(α::Vector{Float64}, β::Vector{Float64},
         σ_m::Float64, σ_ε::Vector{Float64}, w::Vector{Float64},
         V₀::Float64, T::Int, Δt::Float64)::Tuple{Vector{Float64},Vector{Float64}}
     K = length(α)
+    # σ_m and σ_ε come from EWLS / JumpHMM fits on compute_market_growth output,
+    # which scales daily log-returns by 1/Δt. Their variance is therefore 1/Δt ×
+    # true annualized variance; the · Δt factor converts back so Σ is in true
+    # annualized variance — matching the units the closed-form formulas
+    # (μ_log = μ_per_step·τ·Δt, σ² = σ²_per_step·τ·Δt) assume. See
+    # `build_sim_covariance` in SIM.jl for the full rationale.
     Σ = zeros(K, K)
-    σ_m² = σ_m^2
+    σ_m² = σ_m^2 * Δt
     for i in 1:K, j in 1:K
-        Σ[i, j] = (i == j) ? β[i]^2 * σ_m² + σ_ε[i]^2 : β[i] * β[j] * σ_m²
+        Σ[i, j] = (i == j) ? β[i]^2 * σ_m² + σ_ε[i]^2 * Δt :
+                             β[i] * β[j] * σ_m²
     end
     μ_log_per_step = dot(w, α) - 0.5 * dot(w, Σ * w)   # Itô-corrected
     σ²_per_step    = dot(w, Σ * w)
