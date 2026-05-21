@@ -245,5 +245,53 @@ The right choice depends on what the live test is measuring. If it's measuring t
 
 ### Artifacts produced
 
-- `scripts/lambda_swap_deltas.jl` — comparison report generator. Loads each `*.jld2` and the corresponding `*.pre_lambda_swap.jld2` backup, prints the tables above.
-- `scripts/data/*.pre_lambda_swap.jld2` (local only; gitignored) — pre-swap backups of `backtest_mc_results`, `sigma_max_sweep`, `w_max_sweep`, `k_turnover_sweep`, `cash_revisit_sweep`. Keep until the G-value decision is made; they are the only ground truth for comparing future swaps.
+- `scripts/lambda_swap_deltas.jl` — comparison report generator. Loads each `*.jld2` and the corresponding `*.<baseline>.jld2` backup, prints the tables above. Takes an optional baseline suffix as ARGS[1] (default `pre_lambda_swap`); pass `g50` to diff against the G=50 snapshot instead.
+- `scripts/data/*.pre_lambda_swap.jld2` (local only; gitignored) — pre-swap backups (original sigmoid). Keep until the G-value decision is finalized.
+- `scripts/data/*.g50.jld2` (local only; gitignored) — G=50 snapshot taken before the G=20 re-run.
+
+## Backtest Re-Run Results (2026-05-21, G = 20 revision)
+
+After the G=50 results showed material offline regression, G was reduced to 20 in the hope of preserving the bullish-side tilt while minimizing disruption to the existing constraint calibrations. The re-run shows that hypothesis was wrong: **G = 20 is roughly comparable to G = 50 in absolute Sharpe and slightly worse on the constrained variant**, and neither recovers anywhere close to the pre-swap baseline.
+
+### Headline bake-off (median over 20 seeds)
+
+| Strategy                  | pre-swap | G = 50  | G = 20  | G=20 vs pre Δ | G=20 vs G=50 Δ |
+|---------------------------|----------|---------|---------|---------------|----------------|
+| CDWithMPCStrategy         | +2.079   | +1.350  | +1.339  | **−0.740**    | −0.011 (DD +7.7 pts) |
+| ConstrainedCDWithMPC      | +1.681   | +1.353  | **+1.188** | **−0.492**    | **−0.165**     |
+| UnconstrainedCDStrategy   | −1.263   | −1.257  | −1.307  | −0.045        | −0.050         |
+| CostAwareMVStrategy       | +0.732   | +0.715  | +0.716  | −0.016        | +0.001         |
+| MinVarBuyHoldStrategy     | +1.199   | +1.199  | +1.199  | 0.000 ✓       | 0.000 ✓        |
+| EqualWeightStrategy       | +1.160   | +1.160  | +1.160  | 0.000 ✓       | 0.000 ✓        |
+
+### Why G = 20 underperformed expectations
+
+The β-bucket sweep had already shown that at G = 20 the bearish-side reversal does not materialize — bearish-day mean weights stay at 0.030 / 0.033 / 0.032 across low / mid / high-β buckets, essentially flat. G = 20 keeps the **offensive bullish tilt** (high-β amplified when λ < 0) but provides **no defensive rotation** in bearish regimes. G = 50 had *partial* bearish reversal which gave some defensive cover. So lowering G from 50 to 20 removed the defensive mechanism while leaving the offensive one in place — strictly worse than either keeping G = 50 or pushing past G = 100 for full reversal.
+
+The CDWithMPC drawdown nearly doubled (9.9% → 17.6%) going from G = 50 to G = 20, consistent with the loss of defensive rotation in falling-market windows.
+
+### Sweep sweet-spots — almost identical to G = 50
+
+| Sweep        | pre-swap | G = 50         | G = 20         | Direction       |
+|--------------|----------|----------------|----------------|-----------------|
+| σ_max        | 1.5      | ≥ 3            | 2.5            | slight tighten vs G=50 |
+| w_max        | 0.7      | 0.15           | 0.15           | unchanged       |
+| K_turnover   | 25       | ≥ 100          | ≥ 100          | unchanged       |
+| cash_revisit | 5        | 5              | 5              | unchanged       |
+
+The constraint sweet spots are essentially **G-invariant** in the [20, 50] range. σ_max moves slightly tighter at G = 20 (back toward 2.5), but the absolute Sharpe at every grid point is within ~0.04 of the G = 50 number. **The G dial does not move the constraint calibration; it only moves the absolute Sharpe by a small amount, dominated by the bearish-side regime tilt being on (G = 50) vs off (G = 20).**
+
+### Revised takeaway
+
+Three things I was wrong about, captured here so we don't repeat them:
+
+1. **"G = 20 is the lower-disruption choice."** False. Lower G doesn't take pressure off the constraints (sweet spots are nearly identical); it just removes the partial defensive rotation. Net effect on the headline strategy is *slightly negative* vs G = 50, not neutral.
+2. **"More guardrails → smaller hit."** Half right. The constrained variant absorbs more shock than the closed-form CDWithMPC, but the absorption is partial — the constrained strategy still loses 0.33 (G=50) or 0.49 (G=20) Sharpe vs pre-swap. The constraints are not a free hedge against the λ change.
+3. **"G ≈ 50 should give meaningful bearish reversal."** Only partial. Looking at the G sweep, full reversal needs G ≳ 100. G = 50 sits in an awkward middle: enough to break old constraint calibrations but not enough for the bearish defensive rotation it was meant to enable.
+
+### Where this leaves the live test
+
+- **G choice in [20, 50] is offline-roughly-equivalent**, ~0.5 Sharpe below pre-swap regardless. G = 50 marginally better on the constrained strategy.
+- **Constraint re-tuning is the real lever.** σ_max ≥ 3, w_max = 0.15, K_turnover ≥ 100 — same recipe at both G values. If the live test allows a constraint update, that's where the offline-optimal Sharpe is.
+- **Full bearish reversal needs G ≳ 100** AND the defensive cap on the open-item γ-overflow edge case. That's a second-order project, not a quick swap.
+- **If signed λ is required for live correctness regardless of offline Sharpe** (the original reason this swap happened), pick G to match the live-engine intent; offline backtest cannot adjudicate between G = 20 and G = 50 by Sharpe alone.

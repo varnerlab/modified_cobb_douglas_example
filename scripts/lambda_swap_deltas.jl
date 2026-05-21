@@ -15,20 +15,26 @@ using Printf
 
 const PATH_OUT = joinpath(@__DIR__, "data")
 
-# Load both versions; if a "new" file is missing, skip its block with a warning.
+# Baseline suffix selects which pre-swap copy to diff against. Defaults to
+# the original sigmoid backup; pass "g50" to compare the current artifacts
+# against the G=50 snapshot (i.e., the marginal effect of the most recent
+# G change rather than the full sigmoid → signed swap).
+const BASELINE_SUFFIX = length(ARGS) >= 1 ? ARGS[1] : "pre_lambda_swap"
+_baseline_file(file) = replace(file, ".jld2" => ".$(BASELINE_SUFFIX).jld2")
+
 function _safeload(file)
     p = joinpath(PATH_OUT, file)
     isfile(p) ? load_results(p) : nothing
 end
 
 println("=" ^ 78)
-println("lambda_swap_deltas.jl — post-G=50 vs pre-swap artifacts")
+println("lambda_swap_deltas.jl — current artifacts vs baseline = $BASELINE_SUFFIX")
 println("=" ^ 78)
 
 # --- Headline bake-off -------------------------------------------------------
 
 bt_new = _safeload("backtest_mc_results.jld2")
-bt_old = _safeload("backtest_mc_results.pre_lambda_swap.jld2")
+bt_old = _safeload(_baseline_file("backtest_mc_results.jld2"))
 if bt_new === nothing || bt_old === nothing
     @warn "missing backtest_mc_results artifact; skipping headline block"
 else
@@ -95,7 +101,7 @@ function _sweep_block(label, new_file, old_file, grid_key)
                      best_new, best_old, best_new == best_old ? "unchanged" : "MOVED"))
 end
 
-_sweep_block("σ_max",        "sigma_max_sweep.jld2",    "sigma_max_sweep.pre_lambda_swap.jld2",    "σ_max")
-_sweep_block("w_max",        "w_max_sweep.jld2",        "w_max_sweep.pre_lambda_swap.jld2",        "w_max")
-_sweep_block("K_turnover",   "k_turnover_sweep.jld2",   "k_turnover_sweep.pre_lambda_swap.jld2",   "K_turnover")
-_sweep_block("cash_revisit", "cash_revisit_sweep.jld2", "cash_revisit_sweep.pre_lambda_swap.jld2", "cash_revisit")
+_sweep_block("σ_max",        "sigma_max_sweep.jld2",    _baseline_file("sigma_max_sweep.jld2"),    "σ_max")
+_sweep_block("w_max",        "w_max_sweep.jld2",        _baseline_file("w_max_sweep.jld2"),        "w_max")
+_sweep_block("K_turnover",   "k_turnover_sweep.jld2",   _baseline_file("k_turnover_sweep.jld2"),   "K_turnover")
+_sweep_block("cash_revisit", "cash_revisit_sweep.jld2", _baseline_file("cash_revisit_sweep.jld2"), "cash_revisit")
