@@ -346,3 +346,85 @@ The G = 20 currently wired into both engines (`Backtest.jl:181`, the two `train_
 - `state.last_alloc_was_cash = false` (yesterday allocated), so `cash_revisit` won't fire on the immediate next decide. The next non-no-op trigger is the `horizon_elapsed` boundary at τ_td ≥ 21 trading days, or an earlier `band_exit` / `drawdown`.
 - Cron not paused — today's 16:15 ET decide will log `[TRIGGER] in-spec; no ticket` (τ_td = 1, no triggers can fire); subsequent decides up through the horizon boundary should also no-op under typical conditions.
 - G sweep re-run against the corrected Σ is queued before any genuine trigger fires.
+
+## Backtest Re-Run Under Corrected Σ (2026-05-21, G = 20)
+
+Re-ran `lambda_g_sweep.jl`, `06_backtest_mc.jl`, the four constraint sweeps (`07`–`10`), plus a fine-grained σ_max sub-sweep `07b_sigma_max_fine_sweep.jl` against the corrected Σ. Backups of the prior (broken-Σ, G=20) artifacts were saved as `scripts/data/*.pre_units_fix.jld2` so `lambda_swap_deltas.jl pre_units_fix` isolates the units-fix marginal effect.
+
+### G sweep — unchanged (as predicted)
+
+`lambda_g_sweep.jl` re-ran byte-identical to the pre-fix run. Expected: `compute_preference_weights` doesn't go through Σ; γ depends only on α, β, σ_ε, g_m, λ. The sign-invariance result, the magnitude-tilt result, and the bearish-reversal threshold (G ≳ 100) all hold unchanged. The G = 20 calibration carries through.
+
+### Headline bake-off — units fix isolated (`pre_units_fix` baseline)
+
+Same G=20, same constraints, only Σ-units changed:
+
+| Strategy | Old Sharpe | New Sharpe | Δ |
+|---|---|---|---|
+| CDWithMPC | +1.339 | +1.339 | 0 *(no σ_max constraint)* |
+| **ConstrainedCDWithMPC** | **+1.188** | **+1.404** | **+0.216 ✓** |
+| UnconstrainedCD | −1.307 | −1.307 | 0 |
+| CostAwareMV | +0.716 | **−0.687** | **−1.403** *(its risk-aversion was tuned against inflated Σ)* |
+| MinVar | +1.199 | +1.199 | 0 |
+| EqualWeight | +1.160 | +1.160 | 0 |
+
+ConstrainedCDWithMPC — the live trial's strategy — gained +0.216 Sharpe from the units fix alone. CostAwareMV regressed catastrophically: its mean-variance objective uses Σ directly, and its risk-aversion constant was implicitly calibrated against the inflated Σ; under correct units the variance term collapses and the optimizer concentrates into the highest-α name.
+
+### Full arc — sigmoid baseline vs G=20 + corrected Σ
+
+| Strategy | Sigmoid baseline | G=20 + corrected Σ | Total Δ |
+|---|---|---|---|
+| ConstrainedCDWithMPC | +1.681 | +1.404 | −0.277 |
+
+The lambda swap alone cost 0.493 Sharpe; the units fix recovered 0.216 (44%). Net residual loss vs the original sigmoid era: 0.277.
+
+### Constraint sweep sweet-spots — most unchanged, one moved
+
+| Sweep | Trial config | Sweep best (new) | Sharpe at trial vs best |
+|---|---|---|---|
+| σ_max | 0.12 | ≥ 0.20 (non-binding) | **1.029 → 1.404** (Δ −0.375) — see fine sub-sweep below |
+| w_max | 0.10 | **0.15** | 1.431 → 1.539 (Δ −0.108) |
+| K_turnover_frac × B | $10k | $500–$10k (any large) | already at sweet spot ✓ |
+| cash_revisit_interval | 21 | 5 | 1.404 → 2.047 (Δ −0.643) — but changes operational semantics |
+
+K_turnover's sweet-spot grid point moved from 25 (broken Σ) to 500 (corrected Σ) — under correct units the engine wants ~20× more transaction-cost headroom because it deploys much more notional per fire. The trial's $10k budget sits comfortably in the non-binding plateau.
+
+### Fine-grained σ_max sub-sweep — the critical detail (`07b_sigma_max_fine_sweep.jl`)
+
+`07_sigma_max_sweep.jl`'s grid starts at 1.5; under corrected Σ that's already non-binding. The trial uses σ_max = 0.12 which IS binding, so a sub-sweep below 1.5 was needed to see the trial's actual operating Sharpe:
+
+| σ_max | Sharpe med | MaxDD% | Trigs/seed | W_T/W_0 |
+|---|---|---|---|---|
+| 0.05 | 0.912 | 3.0 | 19 | 1.055 |
+| 0.10 | 0.998 | 5.8 | 19 | 1.120 |
+| **0.12** *(trial value)* | **1.029** | **6.7** | **18** | **1.145** |
+| 0.20 | 1.404 | 9.3 | 24 | 1.302 |
+| 0.30 | 1.404 | 9.3 | 24 | 1.302 |
+| 0.50 | 1.404 | 9.3 | 24 | 1.302 |
+| 1.00 | 1.404 | 9.3 | 24 | 1.302 |
+| 1.50 | 1.404 | 9.3 | 24 | 1.302 |
+
+The σ_max constraint stops binding at **σ_max ≈ 0.20** (= 20% annualized portfolio vol cap). Anything ≥ 0.20 ties at Sharpe 1.404 / MaxDD 9.3% — the unconstrained-CD-with-MPC ceiling on this hold-out. Below 0.20 the constraint costs Sharpe monotonically; at the trial's 0.12 the cost is **0.375 Sharpe and 2.6 pp drawdown reduction**.
+
+This is a legitimate strategy trade-off, not a bug:
+
+- **σ_max = 0.12 (current trial)**: tighter vol cap, lower offline Sharpe but lower MaxDD. Operator-imposed risk discipline.
+- **σ_max ≥ 0.20**: full offline-optimal Sharpe, but the engine takes more vol (MaxDD up by 2.6 pp, drawdown band wider).
+
+The trial config keeps σ_max = 0.12. Bumping it to 0.20+ is a single-line change if/when the risk discipline is willing to trade for offline-Sharpe.
+
+### Trial config update applied (2026-05-21)
+
+`config/trial-config.toml`:
+
+- `w_max = 0.10 → 0.15` (sweep sweet spot; +0.108 Sharpe over 0.10 with everything else unchanged; the corresponding test_config.jl assertion updated to match).
+- `σ_max = 0.12` *unchanged* (safety constraint; documented above).
+- `K_turnover_frac = 0.10` *unchanged* (at non-binding plateau).
+- `cash_revisit_interval = 21` *unchanged* (changing to 5 days would fire 4× more often and break the "fire once per MPC horizon" semantics; deferred).
+
+### Artifacts produced
+
+- `scripts/data/*.jld2` — fresh post-units-fix results for `backtest_mc_results`, `sigma_max_sweep`, `w_max_sweep`, `k_turnover_sweep`, `cash_revisit_sweep`.
+- `scripts/data/sigma_max_fine_sweep.jld2` — new fine-grained σ_max sub-sweep result (08 grid points in [0.05, 1.5]).
+- `scripts/data/*.pre_units_fix.jld2` — broken-Σ, G=20 baseline backups (gitignored). Compared against via `lambda_swap_deltas.jl pre_units_fix`.
+- `scripts/data/*.pre_lambda_swap.jld2` — original sigmoid baseline backups (gitignored). Compared against via `lambda_swap_deltas.jl` (default).
