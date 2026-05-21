@@ -84,17 +84,24 @@ function compute_ema(prices::Vector{Float64}; window::Int = 21)::Vector{Float64}
 end
 
 """
-    compute_lambda(short_ema, long_ema; θ = 0.5) -> Vector{Float64}
+    compute_lambda(short_ema, long_ema; G = 1.0) -> Vector{Float64}
 
-Regime-lens λ from EMA crossover. λ_t = 1 / (1 + exp(-(short-long)/θ)) (sigmoid).
-The returned vector is a time series of λ values aligned with the input EMA
-series (one λ per timestep); callers index it at the decision time of interest.
+Signed regime-lens λ from an EMA crossover sentiment signal:
+
+    λ_t = -G · (short_ema_t / long_ema_t - 1)
+
+with gain G > 0. Sign convention: λ_t > 0 is bearish (short below long; risk-averse),
+λ_t < 0 is bullish (short above long; take more risk), λ_t ≈ 0 is neutral. G is a
+sensitivity hyperparameter that must be calibrated to the operational regime — see
+lambda_swap_note.md at the repo root for the rationale behind the signed form.
+
+The returned vector is a time series of λ values aligned with the input EMA series
+(one λ per timestep); callers index it at the decision time of interest.
 """
 function compute_lambda(short_ema::Vector{Float64}, long_ema::Vector{Float64};
-        θ::Float64 = 0.5)::Vector{Float64}
+        G::Float64 = 1.0)::Vector{Float64}
     @assert length(short_ema) == length(long_ema)
-    diff = (short_ema .- long_ema) ./ θ
-    return 1.0 ./ (1.0 .+ exp.(-diff))
+    return -G .* (short_ema ./ long_ema .- 1.0)
 end
 
 """
@@ -110,7 +117,9 @@ function compute_preference_weights(
     γ = zeros(K)
     for i in 1:K
         (αᵢ, βᵢ, _) = sim_parameters[tickers[i]]
-        # 1e-8 floor guards against division by ~0 when βᵢ ≈ 0 (zero-beta names).
+        # 1e-8 floor guards division stability when abs(βᵢ)^lambda → 0
+        # (small βᵢ with lambda > 0). For signed lambda < 0 the exponent flips and
+        # abs(βᵢ)^lambda blows up instead — that drives α/RF → 0 harmlessly.
         RF = max(abs(βᵢ)^lambda, 1e-8)
         g_hat = αᵢ / RF + (abs(βᵢ)^(1.0 - lambda)) * gm_t
         γ[i] = tanh(g_hat)

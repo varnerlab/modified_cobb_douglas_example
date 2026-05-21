@@ -1,0 +1,175 @@
+# Lambda Swap Note — Sigmoid → Signed Gain-Based Form
+
+**Date:** 2026-05-21
+**Files touched:** `code/src/SIM.jl`, `code/test/test_sim.jl`
+**Reason for note:** patch must be applied to a second running engine that shares this code path.
+
+## The Issue
+
+`compute_lambda` in `code/src/SIM.jl` was vendored from `Compute.jl` as an **unsigned sigmoid** crossover:
+
+```julia
+λ_t = 1 / (1 + exp(-(short_ema_t - long_ema_t) / θ))    # OLD — bounded in [0, 1]
+```
+
+This disagrees with the lecture-materials definition of the regime-lens, which is **signed** and gain-based:
+
+```julia
+λ_t = -G · (short_ema_t / long_ema_t - 1)               # NEW — signed, unbounded
+```
+
+Sign convention in the signed form:
+
+| λ_t       | Regime  | Meaning                                       |
+|-----------|---------|-----------------------------------------------|
+| λ_t > 0   | bearish | short EMA below long EMA; engine risk-averse  |
+| λ_t < 0   | bullish | short EMA above long EMA; engine takes risk   |
+| λ_t ≈ 0   | neutral | no strong directional signal                  |
+
+The signed convention is load-bearing — the sign carries information that the sigmoid form discards (sigmoid maps both regimes onto $[0, 1]$, losing the bear/bull axis). Downstream allocators that interpret bearish vs bullish need the sign back.
+
+## The Change (code/src/SIM.jl)
+
+Replaced the body and docstring of `compute_lambda`. Keyword renamed `θ → G` (gain). Signature is otherwise compatible: positional args unchanged, all existing call sites use the default and continue to work.
+
+**Before** (`code/src/SIM.jl:86-98`):
+```julia
+"""
+    compute_lambda(short_ema, long_ema; θ = 0.5) -> Vector{Float64}
+
+Regime-lens λ from EMA crossover. λ_t = 1 / (1 + exp(-(short-long)/θ)) (sigmoid).
+"""
+function compute_lambda(short_ema::Vector{Float64}, long_ema::Vector{Float64};
+        θ::Float64 = 0.5)::Vector{Float64}
+    @assert length(short_ema) == length(long_ema)
+    diff = (short_ema .- long_ema) ./ θ
+    return 1.0 ./ (1.0 .+ exp.(-diff))
+end
+```
+
+**After:**
+```julia
+"""
+    compute_lambda(short_ema, long_ema; G = 1.0) -> Vector{Float64}
+
+Signed regime-lens λ from an EMA crossover sentiment signal:
+
+    λ_t = -G · (short_ema_t / long_ema_t - 1)
+
+with gain G > 0. ...
+"""
+function compute_lambda(short_ema::Vector{Float64}, long_ema::Vector{Float64};
+        G::Float64 = 1.0)::Vector{Float64}
+    @assert length(short_ema) == length(long_ema)
+    return -G .* (short_ema ./ long_ema .- 1.0)
+end
+```
+
+## Downstream Consumers — What to Check
+
+`compute_lambda` feeds `compute_preference_weights` via the per-decision λ scalar. The γ formula is
+
+$$\gamma_i = \tanh\!\left(\frac{\alpha_i}{|\beta_i|^{\lambda}} + |\beta_i|^{1-\lambda}\, g_m\right)$$
+
+and is **mathematically valid for any real λ** as long as $|\beta_i| > 0$. The behavior at the tails changes:
+
+- **λ > 0 (bearish):** $|\beta_i|^\lambda$ grows with $|\beta_i|$; high-beta names get α damped and market exposure scaled down → defensive tilt toward low-beta names.
+- **λ < 0 (bullish):** $|\beta_i|^\lambda = |\beta_i|^{-|\lambda|}$ shrinks with $|\beta_i|$; α and market terms both amplified for high-beta names → risk-on tilt.
+
+The 1e-8 floor on `RF = max(abs(βᵢ)^lambda, 1e-8)` still does the right thing: it only activates when the exponent drives `abs(βᵢ)^lambda → 0` (i.e., positive λ with small β). For negative λ the exponent flips and `abs(βᵢ)^lambda → ∞` for small β, which makes `α/RF → 0` harmlessly. The comment in `compute_preference_weights` was updated accordingly.
+
+The `tanh` squash continues to bound γ ∈ (-1, 1), so γ output is safe even at extreme λ.
+
+## Calibrating G
+
+The default `G = 1.0` is a placeholder. Realistic EMA crossovers (short/long ratio) sit within ~±5% in calm markets, ±10–15% in trending markets. With `G = 1.0` that yields λ ∈ ~±0.05 to ±0.15, which is **much smaller** than the sigmoid form's effective range ([0, 1]) — the regime-lens effect will be muted unless G is scaled up.
+
+Rough mapping (typical SPY EMA gap of ±5%):
+
+| G    | Typical \|λ\| | Comparable to old sigmoid range? |
+|------|---------------|-----------------------------------|
+| 1    | 0.05          | very weak                         |
+| 10   | 0.5           | comparable to mid sigmoid         |
+| 20   | 1.0           | strong; |β|^λ varies meaningfully |
+| 100  | 5.0           | extreme; risk of overflow in $|β|^{1-λ}$ for high-β names |
+
+**You must set G at the call site** before the patched engine produces meaningful regime tilt. Currently all call sites pass no keyword (use default G=1.0):
+- `code/src/Backtest.jl:181` — `compute_lambda(short, long)`
+- `scripts/02_train_bandit.jl:41` — `compute_lambda(short_ema, long_ema)`
+- `scripts/03_train_bandit_mc.jl:38` — `compute_lambda(short_ema, long_ema)`
+
+Decide on a G appropriate to the operational regime and thread it through (via env, strategy field, or hard-code at the call site, depending on the engine's config plumbing). For the other running engine, propagate the same G.
+
+## Tests
+
+The previous test asserted `all(0.0 .<= λ .<= 1.0)` — that invariant is gone. Replaced (`code/test/test_sim.jl:53-74`) with three checks against the new sign convention:
+
+1. Monotonically rising prices → `λ[end] < 0` (bullish).
+2. Monotonically falling prices → `λ[end] > 0` (bearish).
+3. Gain G scales the signal linearly: `λ(G=10) == 10 · λ(G=1)`.
+
+`compute_preference_weights` test untouched (`lambda = 0.5` is still a valid signed value; tanh-bounded assertion still holds).
+
+Full suite verified: **155/155 tests pass.**
+
+## To Patch the Second Engine
+
+1. Locate that engine's `compute_lambda` (or equivalent regime-lens function).
+2. Replace the sigmoid body with the signed gain-based form above. Rename `θ → G` (or whatever keyword fits its style).
+3. Audit consumers — anywhere the old λ was treated as a probability or bounded weight (e.g., used as a mixing coefficient, clipped to [0,1], indexed into a regime table) needs review. The signed form will break those assumptions.
+4. Update any test that asserts `λ ∈ [0, 1]`.
+5. Set G at the engine's primary `compute_lambda` call site. Match the value used here once chosen.
+6. If both engines share log/dashboards, expect λ histograms to shift from $[0, 1]$ to a signed distribution centered near 0 — alerting/monitoring thresholds may need adjustment.
+
+## Open Item (for follow-up, not blocking)
+
+- Numerical edge case: in the γ formula, $|\beta_i|^{1 - \lambda} \cdot g_m$ can produce `Inf` if $|\beta_i| \to 0$ with large positive $1 - \lambda$ (i.e., large negative λ); combined with `g_m = 0` this gives `0 · Inf = NaN`. Realistic G keeps |λ| small enough that this does not fire, but if G is scaled aggressively (G ≳ 100) we should add a defensive cap on the exponentiated term. Track this if you push G high.
+
+## G Sweep Results (2026-05-21)
+
+Ran `scripts/lambda_g_sweep.jl` over G ∈ {0.5, 1, 5, 10, 20, 50, 100, 200} on the 2014–2024 SPY EMA series and the frozen 33-ticker basket. Findings:
+
+| G    | λ min   | λ med  | λ max   | % bear | % γ≤0  | mean pref/K | % γ sign flip vs G=0 | mean \|Δγ vs G=0\| | NaN/Inf? |
+|------|---------|--------|---------|--------|--------|-------------|----------------------|-------------------|----------|
+| 0.5  | -0.024  | -0.006 |  0.049  | 21.0%  | 45.7%  | 17.9 / 33   | 0.0%                 | 0.0005            | no       |
+| 1    | -0.047  | -0.012 |  0.098  | 21.0%  | 45.7%  | 17.9 / 33   | 0.0%                 | 0.0010            | no       |
+| 5    | -0.237  | -0.061 |  0.491  | 21.0%  | 45.7%  | 17.9 / 33   | 0.0%                 | 0.0051            | no       |
+| 10   | -0.474  | -0.123 |  0.982  | 21.0%  | 45.7%  | 17.9 / 33   | 0.0%                 | 0.0102            | no       |
+| 20   | -0.949  | -0.245 |  1.964  | 21.0%  | 45.7%  | 17.9 / 33   | 0.0%                 | 0.0202            | no       |
+| 50   | -2.371  | -0.613 |  4.909  | 21.0%  | 45.7%  | 17.9 / 33   | 0.0%                 | 0.0480            | no       |
+| 100  | -4.743  | -1.226 |  9.818  | 21.0%  | 45.7%  | 17.9 / 33   | 0.0%                 | 0.0872            | no       |
+| 200  | -9.485  | -2.451 | 19.637  | 21.0%  | 45.7%  | 17.9 / 33   | 0.0%                 | 0.1447            | no       |
+
+### Reading the sweep
+
+1. **Numerical stability — green.** No NaN or Inf anywhere across (day, ticker) pairs for G up to 200. The 1e-8 RF floor and the `tanh` squash together absorb every extreme combination encountered on real data. The conservative-cap follow-up flagged above is therefore not urgent in the realistic G range.
+
+2. **λ-distribution constants under G scaling.** % bear (fraction of days with λ > 0) is invariant at 21.0% across all G — expected, since G is a positive multiplier and sign(λ) = sign(short_ema/long_ema − 1) is independent of G. λ-spread scales linearly.
+
+3. **STRUCTURAL FINDING — the lens does not change *which* names are preferred.** % γ sign flip vs the G = 0 (lens-off) baseline is exactly 0.0% for every G tested. The mean number of preferred names per day stays at 17.9 / 33 and the global % γ ≤ 0 stays at 45.7%, independent of G.
+
+   This is not a numerical coincidence; it is an algebraic property of the γ formula:
+
+   $$\gamma_i = \tanh\!\left(\frac{\alpha_i}{|\beta_i|^{\lambda}} + |\beta_i|^{1-\lambda}\, g_m\right) = \tanh\!\left(|\beta_i|^{1-\lambda} \cdot \left(\frac{\alpha_i}{|\beta_i|} + g_m\right)\right).$$
+
+   The prefactor $|\beta_i|^{1-\lambda} > 0$ for all real λ (since $|\beta_i| > 0$), so
+
+   $$\mathrm{sign}(\gamma_i) = \mathrm{sign}\!\left(\frac{\alpha_i}{|\beta_i|} + g_m\right) = \mathrm{sign}(\alpha_i + |\beta_i| \cdot g_m),$$
+
+   which is **independent of λ**. The regime-lens only rescales magnitudes via the $|\beta_i|^{1-\lambda}$ prefactor; it cannot move a name across the preferred / non-preferred boundary.
+
+4. **Magnitude modulation does happen.** `mean |Δγ vs G=0|` grows from 0.0005 at G = 0.5 to 0.145 at G = 200 — a real, monotonic effect on individual γ values. Since the Cobb-Douglas allocator weights names by $\gamma_i / \sum_j \gamma_j$ inside the closed-form (or by relative magnitudes through the log objective in the constrained variant), magnitude shifts of this order *do* propagate to weights and trade deltas. The lens is therefore a weight-tilt knob, not a name-selection knob.
+
+5. **`tanh` saturates early.** γ min/max already reach −1.000 / +1.000 at G = 0.5 — driven by high-|g_m| days. Past G ≈ 10, an increasing share of (day, ticker) pairs sit in tanh's saturating tails, which compresses the differential effect of further increases in G.
+
+### Implications for G calibration
+
+- **Safe range:** anywhere in [0.5, 200] is numerically fine.
+- **Practical range:** G in [10, 50] gives λ spreads of ~[-1, +2] to [-2.4, +4.9], which produces a `mean |Δγ vs G=0|` of 0.010–0.048 — i.e., the lens nudges weights by a few percent on typical days. This is probably the band where the lens "does something" without being washed out by tanh saturation.
+- **Diminishing returns past G ≈ 50–100:** because of tanh saturation, doubling G in this range yields less than double the magnitude shift on weights.
+
+### Implications for downstream design
+
+- **The lens cannot trigger the cash regime alone.** The `:no_preferred` fallback in `code/src/Backtest.jl` and `code/src/Allocator.jl` fires when every γ_i ≤ 0. Per the algebra above, that condition is **fully determined by α and g_m**, never by λ. Days with broad market drops where `α_i + |β_i|·g_m ≤ 0` for every i will still trigger cash — the lens neither prevents nor causes those days.
+- **If you want regime-driven name flipping, the γ formula must be changed.** The current form ties sign-of-γ to a λ-free combination of stock-specific α and the prefactor-canceled market term. A formulation where λ enters additively (e.g., $\gamma_i = \tanh(\alpha_i + \beta_i g_m - \lambda \cdot \text{risk\_term}_i)$) could make λ control the preferred set. Out of scope for the current swap, but worth flagging.
+- **Dashboards / alerts that key off "number of preferred names" or "% in cash" will not respond to G changes.** They will respond to market regime (via g_m and α) just as before. This is good for backwards-compat of those signals; it's bad if the operator expected the regime-lens to be visible there.

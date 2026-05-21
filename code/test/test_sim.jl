@@ -50,12 +50,28 @@ using ConstrainedCobbDouglas
         @test ema[end] < prices[end]
     end
 
-    @testset "compute_lambda is bounded in [0,1]" begin
-        prices = collect(100.0:1.0:300.0)
-        short_ema = compute_ema(prices; window = 21)
-        long_ema  = compute_ema(prices; window = 63)
-        λ = compute_lambda(short_ema, long_ema)
-        @test all(0.0 .<= λ .<= 1.0)
+    @testset "compute_lambda is signed and tracks crossover direction" begin
+        # Monotonically rising prices: short EMA ends above long EMA, so the
+        # crossover ratio exceeds 1, and λ = -G·(ratio - 1) is strictly negative
+        # (bullish) once both EMAs have warmed up.
+        rising = collect(100.0:1.0:300.0)
+        short_rising = compute_ema(rising; window = 21)
+        long_rising  = compute_ema(rising; window = 63)
+        λ_rising = compute_lambda(short_rising, long_rising)
+        @test λ_rising[end] < 0.0
+        @test all(isfinite, λ_rising)
+
+        # Monotonically falling prices: short EMA ends below long EMA, ratio < 1,
+        # λ > 0 (bearish).
+        falling = collect(300.0:-1.0:100.0)
+        short_falling = compute_ema(falling; window = 21)
+        long_falling  = compute_ema(falling; window = 63)
+        λ_falling = compute_lambda(short_falling, long_falling)
+        @test λ_falling[end] > 0.0
+
+        # Gain G scales the signal linearly.
+        λ_g10 = compute_lambda(short_rising, long_rising; G = 10.0)
+        @test isapprox(λ_g10[end], 10.0 * λ_rising[end]; atol = 1e-12)
     end
 
     @testset "compute_preference_weights returns tanh-bounded γ" begin
