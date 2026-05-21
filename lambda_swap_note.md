@@ -198,3 +198,52 @@ The regime-lens operates on the **continuous γ-magnitude axis**, not the discre
 - **The lens cannot trigger the cash regime by itself.** The `:no_preferred` fallback in `code/src/Backtest.jl` and `code/src/Allocator.jl` fires when every γ_i ≤ 0. Per the sign-invariance derivation, that condition is fully determined by α and g_m, never by λ. Cash regimes track broad market drops (via g_m and the α distribution), not the lens setting.
 - **The lens *does* shift composition inside the preferred set.** The $|\beta_i|^{1-\lambda}$ prefactor reweights preferred names by β in a regime-dependent way (see the β-bucket table above). This is the channel the lens uses to swing the basket between offensive (bullish, high-β-tilted) and defensive (bearish, low-β-tilted) postures.
 - **Dashboards / alerts that key off "number of preferred names" or "% in cash" will not respond to G changes.** Those signals see the lens-invariant axis. To monitor the lens's effect you need a composition-aware metric — β-weighted portfolio exposure, the high-vs-low-β weight ratio, or an entropy / concentration measure over the preferred set. Add one of these to the operator dashboard before turning G up.
+
+## Backtest Re-Run Results (2026-05-21, G = 50)
+
+Re-ran `scripts/06_backtest_mc.jl` and the four sweep scripts (`07–10`) against the frozen 33-ticker basket. The bandit / basket pipeline (`02–04`) was left untouched because the live test is committed to the current basket. Before re-running, the previous artifacts were copied to `*.pre_lambda_swap.jld2` for delta comparison; `scripts/lambda_swap_deltas.jl` produces the report below.
+
+### Headline bake-off (median over 20 seeds)
+
+| Strategy                  | Sharpe new / old / Δ      | MaxDD% new / old / Δ      | W_T/W_0 new / old / Δ |
+|---------------------------|---------------------------|---------------------------|------------------------|
+| CDWithMPCStrategy         | +1.350 / +2.079 / **−0.729** | 9.9 / 8.4 / +1.5         | 1.272 / 1.398 / −0.126 |
+| ConstrainedCDWithMPC      | +1.353 / +1.681 / **−0.327** | 9.2 / 7.5 / +1.8         | 1.278 / 1.266 / +0.012 |
+| UnconstrainedCDStrategy   | −1.257 / −1.263 / +0.005     | 31.2 / 24.7 / **+6.5**   | 0.699 / 0.772 / −0.073 |
+| CostAwareMVStrategy       | +0.715 / +0.732 / −0.017     | 9.4 / 9.7 / −0.2         | 1.123 / 1.126 / −0.003 |
+| MinVarBuyHoldStrategy     | +1.199 / +1.199 / 0.000 ✓    | 11.0 / 11.0 / 0.0 ✓      | 1.229 / 1.229 / 0.000 ✓ |
+| EqualWeightStrategy       | +1.160 / +1.160 / 0.000 ✓    | 15.9 / 15.9 / 0.0 ✓      | 1.247 / 1.247 / 0.000 ✓ |
+
+MinVar and EqualWeight rows are unchanged to floating-point precision — confirms the test is isolating the λ effect cleanly (both strategies are λ-independent). The MPC strategies regressed: CDWithMPC took the largest hit because it runs the closed-form CD with no covariance / turnover / concentration guards, so the stronger β-tilted γ propagates straight to weights. The constrained variant absorbs half the shock because σ_max + K_turnover + w_max clip the tilt. UnconstrainedCD was already broken; the new λ deepens its drawdown by 6.5 points.
+
+### Sweep sweet-spots — all four moved toward *looser* constraints
+
+| Sweep        | Old optimum    | New optimum         | New Sharpe at old optimum | Direction      |
+|--------------|----------------|---------------------|----------------------------|----------------|
+| σ_max        | 1.5 (tight)    | ≥ 3 (effectively off) | 0.889 (was 1.977)         | **loosen**     |
+| w_max        | 0.7 (off)      | 0.15 (tight cap)    | 1.381 (was 2.079)         | **tighten**    |
+| K_turnover   | 25 (tight)     | ≥ 100 (loose)       | 0.901 (was 1.751)         | **loosen**     |
+| cash_revisit | 5              | 5 (unchanged)       | 2.009 (was 2.302)         | unchanged level |
+
+The σ_max and K_turnover moves go the same direction — under G = 50, the regime-lens produces stronger weight tilts and the engine wants more headroom to take and to churn the implied position. The w_max move goes the *opposite* way: now that the lens concentrates weight on a few β-favored names, the previously-inactive w_max = 0.7 cap doesn't bite and a tight 0.15 cap is needed to prevent a single name from running too far. Even at every new sweet spot the absolute Sharpe is below the pre-swap peak — the lens is doing more, but the system isn't extracting better risk-adjusted return from it at G = 50.
+
+### What this means for the live test
+
+If the running engine inherited the headline-bake-off defaults (σ_max ≈ 2.5, w_max ≈ 0.7, K_turnover ≈ 25), it is now running with **two constraints near or past their old sweet spots** while the lens applies a noticeably stronger β-tilt. Expected behavior in the live window:
+
+- More frequent trade churn from the K_turnover = 25 cap binding under stronger day-over-day weight swings.
+- Suppressed responsiveness when σ_max ≈ 2.5 would let the engine take a position — the new optimum is σ_max ≥ 3.
+- Concentration risk on β-favored names, since w_max ≈ 0.7 is effectively off and the new lens wants to concentrate.
+
+Three directions to choose from, **in order of disruption to the live test**:
+
+1. **Accept the hit** — keep G = 50 and the current constraint defaults. Defensible only if the signed λ is required for live correctness regardless of offline Sharpe.
+2. **Reduce G** to ≈ 20. The β-bucket sweep showed G = 20 still gives clean bullish tilt with much smaller weight perturbations. Smaller disruption to existing constraint calibrations; abandons the bearish-side reversal.
+3. **Keep G = 50 and re-tune constraints** to the new sweet spots: σ_max ≥ 3, w_max = 0.15, K_turnover ≥ 100, cash_revisit = 5. Largest config delta to deploy; offline-optimal.
+
+The right choice depends on what the live test is measuring. If it's measuring the signed-λ behavior itself, option (1) preserves the experiment. If it's measuring expected portfolio performance, option (3) is what offline now argues for. Option (2) splits the difference.
+
+### Artifacts produced
+
+- `scripts/lambda_swap_deltas.jl` — comparison report generator. Loads each `*.jld2` and the corresponding `*.pre_lambda_swap.jld2` backup, prints the tables above.
+- `scripts/data/*.pre_lambda_swap.jld2` (local only; gitignored) — pre-swap backups of `backtest_mc_results`, `sigma_max_sweep`, `w_max_sweep`, `k_turnover_sweep`, `cash_revisit_sweep`. Keep until the G-value decision is made; they are the only ground truth for comparing future swaps.
