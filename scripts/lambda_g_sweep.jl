@@ -181,7 +181,110 @@ println("  - γ range and % γ≤0 are over (day × ticker) pairs in the basket.
 println("  - mean pref/K = average number of preferred names per day (γ > 0),")
 println("    out of K basket size. Lower means fewer names to allocate over.")
 println("  - % γ sign flip = fraction of (day, ticker) pairs where the γ sign")
-println("    differs from the G=0 (lens-off) baseline. This is the share of")
-println("    decisions the regime-lens actively changes vs no lens.")
+println("    differs from the G=0 (lens-off) baseline. Sign-invariance of γ")
+println("    under λ is structural (see lambda_swap_note.md); 0% is expected.")
+println("  - mean |Δγ vs G=0| = average magnitude shift of γ versus the lens-")
+println("    off baseline. This is where the lens actually does its work — see")
+println("    the β-bucket breakdown below for the directional tilt.")
 println("  - NaN/Inf? = true means the γ formula overflowed for at least one")
 println("    (day, ticker) — a downstream stability red flag.")
+
+# --- β-bucket × regime breakdown ---------------------------------------------
+#
+# The G sweep above shows γ sign never flips with λ, so the lens does not gate
+# which names are preferred. The tilt happens inside the preferred set, via the
+# magnitude prefactor |β_i|^(1-λ). To see that empirically, we split the basket
+# by β tercile and split days by λ sign, then report mean γ and mean allocator
+# weight (γ_i / Σγ+) for preferred names per (β-bucket × regime) cell.
+#
+# Expected pattern if the lens works:
+#   bullish (λ<0):  high-β bucket has the largest mean weight (1 - λ > 1, so
+#                   |β|^(1-λ) amplifies high-β names);
+#   bearish (λ>1):  low-β bucket has the largest mean weight (1 - λ < 0, so
+#                   |β|^(1-λ) amplifies low-β names — the |β|<1 ones).
+
+println()
+println("=" ^ 78)
+println("β-bucket × regime breakdown — does the lens tilt composition?")
+println("=" ^ 78)
+
+basket_betas = Float64[sim_params_all[t][2] for t in basket_tickers]
+β_lo_thresh = quantile(abs.(basket_betas), 1/3)
+β_hi_thresh = quantile(abs.(basket_betas), 2/3)
+bucket_of(β) = abs(β) ≤ β_lo_thresh ? :low :
+               abs(β) ≥ β_hi_thresh ? :high : :mid
+ticker_bucket = Symbol[bucket_of(b) for b in basket_betas]
+println(@sprintf("β tercile cutoffs (|β|): low ≤ %.2f, high ≥ %.2f", β_lo_thresh, β_hi_thresh))
+n_per_bucket = Dict(b => count(==(b), ticker_bucket) for b in (:low, :mid, :high))
+println("Tickers per bucket: low=$(n_per_bucket[:low]), mid=$(n_per_bucket[:mid]), high=$(n_per_bucket[:high])")
+println()
+
+G_for_breakdown = [1.0, 20.0, 100.0]
+bucket_rows = NamedTuple[]
+for G in G_for_breakdown
+    λ_series = compute_lambda(short_ema, long_ema; G = G)
+    # accumulators: (bucket, regime) => Vector{Float64} of normalized weights
+    weight_accum = Dict{Tuple{Symbol,Symbol},Vector{Float64}}()
+    γ_accum      = Dict{Tuple{Symbol,Symbol},Vector{Float64}}()
+    for key in Iterators.product((:low, :mid, :high), (:bullish, :bearish))
+        weight_accum[key] = Float64[]
+        γ_accum[key]      = Float64[]
+    end
+    for t in days
+        λ_t = λ_series[t]
+        regime = λ_t < 0.0 ? :bullish : (λ_t > 0.0 ? :bearish : :neutral)
+        regime == :neutral && continue   # ignore the (rare) λ_t == 0 days
+        γ = compute_preference_weights(sim_params_all, basket_tickers,
+                                       gm_series[t], λ_t)
+        γ_pos = max.(γ, 0.0)
+        s = sum(γ_pos)
+        s == 0.0 && continue              # full cash day; no preferred mass to split
+        weights = γ_pos ./ s
+        for (k, v) in enumerate(γ)
+            v ≤ 0.0 && continue           # only preferred names contribute to tilt
+            b = ticker_bucket[k]
+            push!(weight_accum[(b, regime)], weights[k])
+            push!(γ_accum[(b, regime)], v)
+        end
+    end
+    for regime in (:bullish, :bearish)
+        for bucket in (:low, :mid, :high)
+            ws = weight_accum[(bucket, regime)]
+            gs = γ_accum[(bucket, regime)]
+            push!(bucket_rows, (
+                G        = G,
+                regime   = regime,
+                bucket   = bucket,
+                n        = length(ws),
+                mean_γ   = isempty(gs) ? NaN : mean(gs),
+                mean_w   = isempty(ws) ? NaN : mean(ws),
+                share_w  = isempty(ws) ? NaN : sum(ws),  # raw weight mass in this bucket-day
+            ))
+        end
+    end
+end
+
+# Display: mean preferred γ and mean allocator weight per (G × regime × bucket)
+df_bucket = DataFrame(bucket_rows)
+df_bucket_disp = DataFrame(
+    "G"           => [@sprintf("%.0f", r.G)        for r in eachrow(df_bucket)],
+    "regime"      => [string(r.regime)             for r in eachrow(df_bucket)],
+    "β bucket"    => [string(r.bucket)             for r in eachrow(df_bucket)],
+    "n (pref)"    => [string(r.n)                  for r in eachrow(df_bucket)],
+    "mean γ"      => [@sprintf("%.4f", r.mean_γ)   for r in eachrow(df_bucket)],
+    "mean weight" => [@sprintf("%.4f", r.mean_w)   for r in eachrow(df_bucket)],
+)
+pretty_table(df_bucket_disp;
+    table_format = TextTableFormat(borders = text_table_borders__compact),
+    fit_table_in_display_horizontally = false,
+    fit_table_in_display_vertically   = false,
+)
+
+println()
+println("Read this table by row pair: at each G, compare 'mean weight' across")
+println("β buckets within a single regime.")
+println("  bullish: if the lens tilts toward risk, mean weight for high-β > low-β.")
+println("  bearish: if the lens tilts defensive, mean weight for low-β > high-β.")
+println("'mean weight' is the average allocator weight γ_i / Σγ⁺ for preferred")
+println("(day, ticker) pairs in that cell; absolute level depends on bucket size,")
+println("so compare directionally between cells with similar n.")

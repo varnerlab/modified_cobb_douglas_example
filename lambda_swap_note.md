@@ -162,14 +162,38 @@ Ran `scripts/lambda_g_sweep.jl` over G ∈ {0.5, 1, 5, 10, 20, 50, 100, 200} on 
 
 5. **`tanh` saturates early.** γ min/max already reach −1.000 / +1.000 at G = 0.5 — driven by high-|g_m| days. Past G ≈ 10, an increasing share of (day, ticker) pairs sit in tanh's saturating tails, which compresses the differential effect of further increases in G.
 
+### β-Bucket × Regime Tilt (empirical, same sweep)
+
+The sign-invariance result above said nothing about *which* preferred names attract weight. To see the actual regime tilt, split the basket into β-terciles (|β| ≤ 0.81 = low, |β| ≥ 1.07 = high) and split days by λ sign, then average the normalized allocator weight $w_i = \gamma_i / \sum_j \gamma_j^+$ over preferred (day, ticker) pairs:
+
+| G   | Regime   | low-β mean w | mid-β mean w | high-β mean w | high / low ratio |
+|-----|----------|--------------|--------------|---------------|------------------|
+| 1   | bullish  | 0.0278       | 0.0350       | 0.0355        | 1.28             |
+| 1   | bearish  | 0.0288       | 0.0334       | 0.0331        | 1.15 (no reversal) |
+| 20  | bullish  | 0.0255       | 0.0355       | 0.0373        | 1.46             |
+| 20  | bearish  | 0.0302       | 0.0330       | 0.0321        | 1.06 (effectively flat) |
+| 100 | bullish  | 0.0179       | 0.0365       | **0.0441**    | **2.46**         |
+| 100 | bearish  | **0.0342**   | 0.0319       | 0.0290        | 0.85 (**reversal**: low > high) |
+
+The lens does precisely what the algebra predicts:
+
+- **Bullish (λ < 0):** the exponent $1 - \lambda > 1$ amplifies high-β names. High-β weight rises and low-β weight falls. Visible at any G; pronounced at G ≥ 50.
+- **Bearish (λ > 0):** the exponent $1 - \lambda < 1$, and only when **λ > 1** does the exponent go negative and start amplifying low-β names instead. With this EMA setup the median bearish λ is small (≈ 0.012 at G=1), so for the lens to push the bearish-day exponent past 1 you need G ≥ ~50. At G = 1 and G = 20 the bearish row shows essentially no reversal; at G = 100 it does (low-β weight 0.034 vs high-β 0.029).
+
+This is the regime tilt mechanism. It is **magnitude-based, not selection-based** — names don't cross the preferred / non-preferred boundary, but their share of the preferred-set weight mass shifts systematically with β as λ changes.
+
 ### Implications for G calibration
 
 - **Safe range:** anywhere in [0.5, 200] is numerically fine.
-- **Practical range:** G in [10, 50] gives λ spreads of ~[-1, +2] to [-2.4, +4.9], which produces a `mean |Δγ vs G=0|` of 0.010–0.048 — i.e., the lens nudges weights by a few percent on typical days. This is probably the band where the lens "does something" without being washed out by tanh saturation.
-- **Diminishing returns past G ≈ 50–100:** because of tanh saturation, doubling G in this range yields less than double the magnitude shift on weights.
+- **Useful range for the bullish-tilt only:** G ∈ [10, 50] amplifies high-β in rising markets. Bearish-side tilt is too weak here to reverse the ordering.
+- **Useful range for both directions:** **G ≈ 50–100**. At G = 100 the bullish high/low ratio reaches 2.5× and the bearish row reverses to a low > high ordering. This is the band where the lens actually swings the basket between offensive and defensive postures.
+- **Diminishing returns past G ≈ 100–200** because of tanh saturation on high-|g_m| days.
+- Recommendation if the running engine needs a single G: **start at G = 75**, monitor mean β-exposure by regime, and tune up or down based on how aggressive a swing you want.
 
 ### Implications for downstream design
 
-- **The lens cannot trigger the cash regime alone.** The `:no_preferred` fallback in `code/src/Backtest.jl` and `code/src/Allocator.jl` fires when every γ_i ≤ 0. Per the algebra above, that condition is **fully determined by α and g_m**, never by λ. Days with broad market drops where `α_i + |β_i|·g_m ≤ 0` for every i will still trigger cash — the lens neither prevents nor causes those days.
-- **If you want regime-driven name flipping, the γ formula must be changed.** The current form ties sign-of-γ to a λ-free combination of stock-specific α and the prefactor-canceled market term. A formulation where λ enters additively (e.g., $\gamma_i = \tanh(\alpha_i + \beta_i g_m - \lambda \cdot \text{risk\_term}_i)$) could make λ control the preferred set. Out of scope for the current swap, but worth flagging.
-- **Dashboards / alerts that key off "number of preferred names" or "% in cash" will not respond to G changes.** They will respond to market regime (via g_m and α) just as before. This is good for backwards-compat of those signals; it's bad if the operator expected the regime-lens to be visible there.
+The regime-lens operates on the **continuous γ-magnitude axis**, not the discrete preferred / non-preferred axis. That has three concrete downstream consequences:
+
+- **The lens cannot trigger the cash regime by itself.** The `:no_preferred` fallback in `code/src/Backtest.jl` and `code/src/Allocator.jl` fires when every γ_i ≤ 0. Per the sign-invariance derivation, that condition is fully determined by α and g_m, never by λ. Cash regimes track broad market drops (via g_m and the α distribution), not the lens setting.
+- **The lens *does* shift composition inside the preferred set.** The $|\beta_i|^{1-\lambda}$ prefactor reweights preferred names by β in a regime-dependent way (see the β-bucket table above). This is the channel the lens uses to swing the basket between offensive (bullish, high-β-tilted) and defensive (bearish, low-β-tilted) postures.
+- **Dashboards / alerts that key off "number of preferred names" or "% in cash" will not respond to G changes.** Those signals see the lens-invariant axis. To monitor the lens's effect you need a composition-aware metric — β-weighted portfolio exposure, the high-vs-low-β weight ratio, or an entropy / concentration measure over the preferred set. Add one of these to the operator dashboard before turning G up.
