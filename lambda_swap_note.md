@@ -93,12 +93,13 @@ Rough mapping (typical SPY EMA gap of ±5%):
 | 20   | 1.0           | strong; |β|^λ varies meaningfully |
 | 100  | 5.0           | extreme; risk of overflow in $|β|^{1-λ}$ for high-β names |
 
-**You must set G at the call site** before the patched engine produces meaningful regime tilt. Currently all call sites pass no keyword (use default G=1.0):
-- `code/src/Backtest.jl:181` — `compute_lambda(short, long)`
-- `scripts/02_train_bandit.jl:41` — `compute_lambda(short_ema, long_ema)`
-- `scripts/03_train_bandit_mc.jl:38` — `compute_lambda(short_ema, long_ema)`
+**Chosen value: G = 50.0 (2026-05-21).** Top of the practical range from the sweep below; strongest meaningful weight tilt before the open-item defensive-cap caveat fires at G ≳ 100. Wired into all call sites:
+- `code/src/Backtest.jl:181` — `compute_lambda(short, long; G = 50.0)`
+- `scripts/02_train_bandit.jl:41` — `compute_lambda(short_ema, long_ema; G = 50.0)`
+- `scripts/03_train_bandit_mc.jl:38` — `compute_lambda(short_ema, long_ema; G = 50.0)`
+- `constrained-CD-with-MPC-paper-trade-trial/code/src/decide.jl` — `const _LAMBDA_GAIN = 50.0` threaded through the sole `compute_lambda` call site.
 
-Decide on a G appropriate to the operational regime and thread it through (via env, strategy field, or hard-code at the call site, depending on the engine's config plumbing). For the other running engine, propagate the same G.
+Companion fix at the same time: `Backtest.jl:183` fallback (when the EMA window is shorter than 21 days) was `λ_t = 0.5` — the sigmoid form's neutral midpoint. Under the signed form, neutral is 0.0; the old constant would have introduced a fixed mild bearish lean independent of market state. Updated to `λ_t = 0.0`.
 
 ## Tests
 
